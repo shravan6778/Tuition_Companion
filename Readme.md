@@ -7,3 +7,8 @@ Tuition Companion is to be an AI powered solution using Knowledge Graph, Generat
 ## Architecture Decisions
 
 Crucial decisions on the architecture
+
+- **Content vs. Rooms:** Subjects and chapters are uploaded and
+  processed once per teacher (OCR + concept extraction via Azure
+  Document Intelligence + LLM), then assigned to one or more
+  rooms — avoiding redundant processing across batches.
