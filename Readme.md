@@ -12,3 +12,7 @@ Crucial decisions on the architecture
   processed once per teacher (OCR + concept extraction via Azure
   Document Intelligence + LLM), then assigned to one or more
   rooms — avoiding redundant processing across batches.
+- **Verification over self-report:** Marking a concept "complete"
+  auto-triggers a short comprehension check rather than relying on
+  the student's word, closing the gap between reported and actual
+  understanding.
