@@ -19,3 +19,5 @@ Crucial decisions on the architecture
 - **Graph-aware weak areas:** Weak concepts propagate through a
   knowledge graph of prerequisite relationships, so a struggling
   foundational concept flags dependent concepts automatically.
+- **Roles:** Teacher, Student, and Parent (linked, read-only) —
+  each with a scoped dashboard.
