@@ -16,3 +16,6 @@ Crucial decisions on the architecture
   auto-triggers a short comprehension check rather than relying on
   the student's word, closing the gap between reported and actual
   understanding.
+- **Graph-aware weak areas:** Weak concepts propagate through a
+  knowledge graph of prerequisite relationships, so a struggling
+  foundational concept flags dependent concepts automatically.
