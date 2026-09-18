@@ -21,3 +21,15 @@ Crucial decisions on the architecture
   foundational concept flags dependent concepts automatically.
 - **Roles:** Teacher, Student, and Parent (linked, read-only) —
   each with a scoped dashboard.
+
+## Features of the Application
+
+- **Authentication & Roles**
+- **Tuition Rooms**
+- **Content Library (Subjects & Chapters)**
+- **Doubt Resolution (per chapter)**
+- **Assignments & Verification**
+- **Test & Quiz Generation**
+- **Weak Area Detections**
+- **Dashboards**
+- **Attendance with Progress tracking**
