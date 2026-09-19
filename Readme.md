@@ -4,32 +4,4 @@ Tuition Companion is a solution that helps all the tuition teachers to track eac
 
 Tuition Companion is to be an AI powered solution using Knowledge Graph, Generative AI and Azure AI Services.
 
-## Architecture Decisions
-
-Crucial decisions on the architecture
-
-- **Content vs. Rooms:** Subjects and chapters are uploaded and
-  processed once per teacher (OCR + concept extraction via Azure
-  Document Intelligence + LLM), then assigned to one or more
-  rooms — avoiding redundant processing across batches.
-- **Verification over self-report:** Marking a concept "complete"
-  auto-triggers a short comprehension check rather than relying on
-  the student's word, closing the gap between reported and actual
-  understanding.
-- **Graph-aware weak areas:** Weak concepts propagate through a
-  knowledge graph of prerequisite relationships, so a struggling
-  foundational concept flags dependent concepts automatically.
-- **Roles:** Teacher, Student, and Parent (linked, read-only) —
-  each with a scoped dashboard.
-
-## Features of the Application
-
-- **Authentication & Roles**
-- **Tuition Rooms**
-- **Content Library (Subjects & Chapters)**
-- **Doubt Resolution (per chapter)**
-- **Assignments & Verification**
-- **Test & Quiz Generation**
-- **Weak Area Detections**
-- **Dashboards**
-- **Attendance with Progress tracking**
+Stack: FastAPI · React · PostgreSQL · Firebase Auth · Azure AI (later)
