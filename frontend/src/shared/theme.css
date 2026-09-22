@@ -1,0 +1,47 @@
+:root {
+  --primary: #0f766e;
+  --accent: #f59e0b;
+  --success: #16a34a;
+  --warn: #ea580c;
+  --bg: #fafaf9;
+  --surface: #ffffff;
+  --text: #1c1917;
+  --muted: #57534e;
+  --border: #e7e5e4;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.5 Inter, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+h1, h2, h3 { font-family: Poppins, Inter, sans-serif; margin: 0 0 8px; }
+h1 { font-size: 30px; font-weight: 600; }
+h2 { font-size: 23px; font-weight: 600; }
+h3 { font-size: 18px; font-weight: 500; }
+
+.small { font-size: 13px; color: var(--muted); }
+.container { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+.stack > * + * { margin-top: 12px; }
+.row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+
+label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.input { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: #fff; }
+
+.btn { min-height: 44px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font: 500 14px Inter, sans-serif; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.btn.secondary { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+
+.error { color: var(--warn); font-size: 14px; }
+.code { display: inline-block; font: 600 22px/1 Poppins, monospace; letter-spacing: 0.15em; background: #f0fdfa; color: var(--primary); padding: 8px 12px; border-radius: 8px; }
+.badge { background: var(--accent); color: #1c1917; font-size: 13px; padding: 2px 8px; border-radius: 999px; }
+
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
