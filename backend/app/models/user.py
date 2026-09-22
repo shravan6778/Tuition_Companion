@@ -18,7 +18,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    firebase_uid: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    supertokens_user_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(100))
     phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     role: Mapped[Role] = mapped_column(Enum(Role, name="role"))
