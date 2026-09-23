@@ -10,7 +10,7 @@ Stack: FastAPI · React · PostgreSQL · SuperTokens (self-hosted) · Azure AI (
 
 Auth, roles, and room/parent linking are working end to end.
 
-- Sign up and log in as a teacher, student, or parent (phone + password, via a self-hosted SuperTokens core)
+- Sign up and log in as a teacher, student, or parent (username + password, via a self-hosted SuperTokens core)
 - Teachers create rooms and get a join code
 - Students join a room with that code
 - Parents link to a student with the student's link code and get a read-only view
