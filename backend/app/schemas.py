@@ -19,7 +19,7 @@ def normalize_phone(value: str) -> str:
 
     return value
 
-
+#username added
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
