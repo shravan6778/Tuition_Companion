@@ -5,7 +5,7 @@ import { useAuth } from "./AuthContext";
 export default function LoginPage() {
   const { login } = useAuth();
   const nav = useNavigate();
-  const [phone, setPhone] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
@@ -13,7 +13,7 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     try {
-      const me = await login(phone, password);
+      const me = await login(username, password);
       nav(`/${me.role}`);
     } catch (err) {
       setError(err.message);
@@ -25,14 +25,13 @@ export default function LoginPage() {
       <form className="card stack" onSubmit={submit}>
         <h2>Log in</h2>
         <div>
-          <label htmlFor="phone">Phone number</label>
+          <label htmlFor="username">Username</label>
           <input
-            id="phone"
+            id="username"
             className="input"
-            type="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="+919876543210"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="yourusername"
             required
           />
         </div>

@@ -5,7 +5,13 @@ from app.models import Role, User
 
 def add_user(session_factory, role: Role):
     with session_factory() as db:
-        db.add(User(supertokens_user_id=f"st-{role.value}", name="Test", phone=f"+9190000000{len(role.value)}{ord(role.value[0])}", role=role))
+        db.add(User(
+            supertokens_user_id=f"st-{role.value}",
+            name="Test",
+            username=f"{role.value}_user",
+            phone="+919000000000",
+            role=role,
+        ))
         db.commit()
 
 

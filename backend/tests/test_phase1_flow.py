@@ -6,6 +6,7 @@ def make_user(session_factory, role: Role, phone: str, name="Test User"):
         user = User(
             supertokens_user_id=f"st-{phone}",
             name=name,
+            username=f"user{phone[-6:]}",
             phone=phone,
             role=role,
             link_code=f"LINK{phone[-4:]}" if role == Role.student else None,

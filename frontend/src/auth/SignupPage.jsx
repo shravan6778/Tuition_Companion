@@ -7,6 +7,7 @@ export default function SignupPage() {
   const nav = useNavigate();
   const [form, setForm] = useState({
     name: "",
+    username: "",
     phone: "",
     password: "",
     role: "student",
@@ -52,6 +53,23 @@ export default function SignupPage() {
             required
             minLength={2}
           />
+        </div>
+        <div>
+          <label htmlFor="username">Username</label>
+          <input
+            id="username"
+            className="input"
+            value={form.username}
+            onChange={set("username")}
+            placeholder="lowercase, letters/numbers/_"
+            required
+            minLength={3}
+            maxLength={30}
+          />
+          <span className="small">
+            This is what you'll log in with. Each family member needs a
+            different one, even if you share a phone.
+          </span>
         </div>
         <div>
           <label htmlFor="phone">Phone number</label>

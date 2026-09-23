@@ -6,7 +6,7 @@ import {
 } from "supertokens-web-js/recipe/session";
 import "./supertokensInit";
 import { api } from "../shared/api";
-import { normalizePhone, phoneToEmail } from "./phone";
+import { normalizePhone, normalizeUsername, usernameToEmail } from "./identity";
 
 const AuthCtx = createContext(null);
 export const useAuth = () => useContext(AuthCtx);
@@ -28,29 +28,30 @@ export function AuthProvider({ children }) {
     })();
   }, []);
 
-  async function login(phone, password) {
+  async function login(username, password) {
     const response = await signIn({
       formFields: [
-        { id: "email", value: phoneToEmail(phone) },
+        { id: "email", value: usernameToEmail(normalizeUsername(username)) },
         { id: "password", value: password },
       ],
     });
     if (response.status !== "OK") {
-      throw new Error("Invalid phone number or password"); // generic on purpose
+      throw new Error("Invalid username or password"); // generic on purpose
     }
     const me = await api("/auth/me");
     setProfile(me);
     return me;
   }
 
-  async function signup({ name, phone, password, role }) {
-    const normalized = normalizePhone(phone);
+  async function signup({ name, username, phone, password, role }) {
+    const normalizedUsername = normalizeUsername(username);
     const response = await signUp({
       formFields: [
-        { id: "email", value: phoneToEmail(normalized) },
+        { id: "email", value: usernameToEmail(normalizedUsername) },
         { id: "password", value: password },
         { id: "name", value: name },
-        { id: "phone", value: normalized },
+        { id: "username", value: normalizedUsername },
+        { id: "phone", value: normalizePhone(phone) },
         { id: "role", value: role },
       ],
     });

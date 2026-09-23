@@ -3,7 +3,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Post*****
+      POSTGRES_PASSWORD: Postgre21
       POSTGRES_DB: tuition
     ports:
       - "5434:5432"
@@ -18,7 +18,7 @@ services:
     ports:
       - "3567:3567"
     environment:
-      POSTGRESQL_CONNECTION_URI: "postgresql://postgres:Post***@db:5432/supertokens"
+      POSTGRESQL_CONNECTION_URI: "postgresql://postgres:Postgre21@db:5432/supertokens"
     restart: unless-stopped
 
 volumes:

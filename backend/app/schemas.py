@@ -1,18 +1,22 @@
 import re
 import uuid
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import Role, RoomType
 
+
 PHONE_RE = re.compile(r"^\+?[0-9]{10,15}$")
 
 
 def normalize_phone(value: str) -> str:
     value = re.sub(r"[\s\-()]", "", value)
+
     if not PHONE_RE.match(value):
         raise ValueError("Enter a valid phone number")
+
     return value
 
 
@@ -20,6 +24,7 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     name: str
+    username: str
     phone: str
     role: Role
     link_code: str | None = None
@@ -32,6 +37,7 @@ class RoomCreate(BaseModel):
 
 class RoomOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     name: str
     room_type: RoomType
