@@ -88,7 +88,7 @@ def override_email_password_apis(original_implementation: APIInterface) -> APIIn
                         is not None,
                         length=8,
                     )
-
+                #username replaces phone as the unique login identifier
                 db.add(
                     User(
                         supertokens_user_id=response.user.id,
@@ -138,6 +138,7 @@ def init_supertokens() -> None:
         recipe_list=[
             session.init(),
             emailpassword.init(
+                #username replaces phone as the unique login identifier
                 sign_up_feature=InputSignUpFeature(
                     form_fields=[
                         InputFormField(id="name"),
