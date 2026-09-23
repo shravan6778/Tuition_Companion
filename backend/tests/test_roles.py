@@ -2,7 +2,7 @@ import pytest
 
 from app.models import Role, User
 
-
+#update fixtures for username field
 def add_user(session_factory, role: Role):
     with session_factory() as db:
         db.add(User(

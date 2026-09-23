@@ -1,6 +1,6 @@
 from app.models import Role, User
 
-
+#update fixtures for username field
 def make_user(session_factory, role: Role, phone: str, name="Test User"):
     with session_factory() as db:
         user = User(
