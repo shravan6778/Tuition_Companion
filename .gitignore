@@ -1,0 +1,11 @@
+.env
+*.env.local
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+firebase-service-account.json
+*.sqlite
+storage/
