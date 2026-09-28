@@ -111,3 +111,16 @@ class ChapterOut(BaseModel):
     status: ChapterStatus
     error_message: str | None = None
     created_at: datetime
+    
+class AttachSubjectIn(BaseModel):
+    subject_id: uuid.UUID
+
+
+class StudentChapterOut(BaseModel):
+    """What a student may see of a chapter: no file path, hash, or processing details."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    title: str
+    position: int

@@ -1,13 +1,15 @@
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.db.session import get_db
-from app.schemas import ChapterOut, MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
+from app import content
+from app.schemas import AttachSubjectIn, ChapterOut, MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
 from app.teacher import chapters as chap
 from app.teacher import library as lib
+from app.teacher import room_content as rc
 from app.teacher import rooms as svc
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
@@ -60,3 +62,27 @@ def upload_chapter(
 def list_chapters(subject_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
     subject = lib.get_owned_subject(db, teacher, subject_id)
     return chap.list_chapters(db, subject)
+
+@router.post("/rooms/{room_id}/subjects", response_model=list[SubjectOut], status_code=status.HTTP_201_CREATED)
+def attach_subject(
+    room_id: uuid.UUID, body: AttachSubjectIn, teacher=Depends(require_teacher), db: Session = Depends(get_db)
+):
+    room = svc.get_owned_room(db, teacher, room_id)
+    subject = lib.get_owned_subject(db, teacher, body.subject_id)
+    rc.attach_subject(db, room, subject)
+    return content.list_room_subjects(db, room.id)
+
+
+@router.get("/rooms/{room_id}/subjects", response_model=list[SubjectOut])
+def room_subjects(room_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    room = svc.get_owned_room(db, teacher, room_id)
+    return content.list_room_subjects(db, room.id)
+
+
+@router.delete("/rooms/{room_id}/subjects/{subject_id}", status_code=status.HTTP_204_NO_CONTENT)
+def detach_subject(
+    room_id: uuid.UUID, subject_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)
+):
+    room = svc.get_owned_room(db, teacher, room_id)
+    rc.detach_subject(db, room, subject_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
