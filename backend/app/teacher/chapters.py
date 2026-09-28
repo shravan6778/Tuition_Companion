@@ -49,3 +49,20 @@ def upload_chapter(db: Session, subject: Subject, title: str, upload: UploadFile
     db.commit()
     db.refresh(chapter)
     return chapter
+
+def delete_chapter(db: Session, subject: Subject, chapter_id: uuid.UUID) -> None:
+    chapter = db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.subject_id == subject.id))
+    if chapter is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
+    if chapter.status == ChapterStatus.processing:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This chapter is being processed. Try again in a moment.")
+
+    file_path, file_hash = chapter.file_path, chapter.file_hash
+    db.delete(chapter)
+    db.commit()
+
+    # Files are shared by hash: remove from disk only when no chapter (any subject) still uses it.
+    if file_path and file_hash:
+        still_used = db.scalar(select(Chapter.id).where(Chapter.file_hash == file_hash).limit(1))
+        if still_used is None:
+            storage.delete_file(file_path)

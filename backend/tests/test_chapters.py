@@ -86,3 +86,40 @@ def test_students_cannot_upload(client, session_factory):
     sid = make_subject(client, t)
     s = add_user(session_factory, Role.student)
     assert upload(client, s, sid).status_code == 403
+    
+    
+def test_delete_chapter_removes_row_and_file(client, session_factory):
+    h = add_user(session_factory, Role.teacher)
+    sid = make_subject(client, h)
+    cid = upload(client, h, sid).json()["id"]
+    assert client.delete(f"/teacher/subjects/{sid}/chapters/{cid}", headers=h).status_code == 204
+    assert client.get(f"/teacher/subjects/{sid}/chapters", headers=h).json() == []
+    assert list(Path(settings.storage_dir).rglob("*.pdf")) == []
+
+
+def test_delete_keeps_file_still_used_by_another_chapter(client, session_factory):
+    h = add_user(session_factory, Role.teacher)
+    a, b = make_subject(client, h, "Maths"), make_subject(client, h, "Physics")
+    cid_a = upload(client, h, a).json()["id"]
+    upload(client, h, b)  # same bytes, shared stored file
+    client.delete(f"/teacher/subjects/{a}/chapters/{cid_a}", headers=h)
+    assert len(list(Path(settings.storage_dir).rglob("*.pdf"))) == 1
+
+
+def test_delete_is_owner_only_and_blocked_while_processing(client, session_factory):
+    import uuid as _uuid
+
+    from sqlalchemy import update
+
+    from app.models import Chapter, ChapterStatus
+
+    a = add_user(session_factory, Role.teacher, "a")
+    b = add_user(session_factory, Role.teacher, "b")
+    sid = make_subject(client, a)
+    cid = upload(client, a, sid).json()["id"]
+    assert client.delete(f"/teacher/subjects/{sid}/chapters/{cid}", headers=b).status_code == 404
+
+    with session_factory() as db:
+        db.execute(update(Chapter).where(Chapter.id == _uuid.UUID(cid)).values(status=ChapterStatus.processing))
+        db.commit()
+    assert client.delete(f"/teacher/subjects/{sid}/chapters/{cid}", headers=a).status_code == 409

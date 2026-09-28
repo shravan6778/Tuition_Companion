@@ -86,3 +86,11 @@ def detach_subject(
     room = svc.get_owned_room(db, teacher, room_id)
     rc.detach_subject(db, room, subject_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+@router.delete("/subjects/{subject_id}/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_chapter(
+    subject_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)
+):
+    subject = lib.get_owned_subject(db, teacher, subject_id)
+    chap.delete_chapter(db, subject, chapter_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -35,3 +35,11 @@ def save_by_hash(data: bytes, file_hash: str, ext: str) -> str:
         tmp.write_bytes(data)
         os.replace(tmp, target)  # atomic: never leaves a half-written file
     return rel.as_posix()
+
+def delete_file(rel_path: str) -> None:
+    """Remove a stored file. Refuses any path that resolves outside the storage root."""
+    root = Path(settings.storage_dir).resolve()
+    target = (root / rel_path).resolve()
+    if root not in target.parents:
+        return
+    target.unlink(missing_ok=True)
