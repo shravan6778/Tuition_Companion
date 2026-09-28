@@ -5,8 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.db.session import get_db
-from app.schemas import MemberOut, RoomCreate, RoomOut
+from app.schemas import MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
+from app.teacher import library as lib
 from app.teacher import rooms as svc
+
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
 
@@ -30,3 +32,12 @@ def list_rooms(teacher=Depends(require_teacher), db: Session = Depends(get_db)):
 def room_members(room_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
     room = svc.get_owned_room(db, teacher, room_id)
     return svc.list_members(db, room)
+
+@router.post("/subjects", response_model=SubjectOut, status_code=status.HTTP_201_CREATED)
+def create_subject(body: SubjectCreate, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    return SubjectOut.model_validate(lib.create_subject(db, teacher, body.name, body.grade))
+
+
+@router.get("/subjects", response_model=list[SubjectOut])
+def list_subjects(teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    return lib.list_subjects(db, teacher)
