@@ -1,14 +1,14 @@
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.db.session import get_db
-from app.schemas import MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
+from app.schemas import ChapterOut, MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
+from app.teacher import chapters as chap
 from app.teacher import library as lib
 from app.teacher import rooms as svc
-
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
 
@@ -41,3 +41,22 @@ def create_subject(body: SubjectCreate, teacher=Depends(require_teacher), db: Se
 @router.get("/subjects", response_model=list[SubjectOut])
 def list_subjects(teacher=Depends(require_teacher), db: Session = Depends(get_db)):
     return lib.list_subjects(db, teacher)
+
+@router.post(
+    "/subjects/{subject_id}/chapters", response_model=ChapterOut, status_code=status.HTTP_201_CREATED
+)
+def upload_chapter(
+    subject_id: uuid.UUID,
+    title: str = Form(min_length=2, max_length=200),
+    file: UploadFile = File(...),
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    subject = lib.get_owned_subject(db, teacher, subject_id)
+    return chap.upload_chapter(db, subject, title.strip(), file)
+
+
+@router.get("/subjects/{subject_id}/chapters", response_model=list[ChapterOut])
+def list_chapters(subject_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    subject = lib.get_owned_subject(db, teacher, subject_id)
+    return chap.list_chapters(db, subject)

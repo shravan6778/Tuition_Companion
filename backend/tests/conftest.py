@@ -51,3 +51,10 @@ def client(session_factory):
     app.dependency_overrides[session_dependency] = override_session
     yield TestClient(app)
     app.dependency_overrides.clear()
+    
+@pytest.fixture(autouse=True)
+def tmp_storage(tmp_path, monkeypatch):
+    """Uploads go to a throwaway folder, never the real storage dir."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "storage_dir", str(tmp_path / "storage"))

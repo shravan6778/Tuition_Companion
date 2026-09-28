@@ -8,4 +8,4 @@ node_modules/
 dist/
 firebase-service-account.json
 *.sqlite
-storage/
+backend/storage/
