@@ -1,80 +1,67 @@
-import enum
-import uuid
-from datetime import datetime
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON, Text, Table, Uuid
+from sqlalchemy.orm import relationship
+from app.models.base import Base
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, func, JSON, Boolean
-from sqlalchemy.orm import Mapped, mapped_column
+# Association table for Student to Book linkage [source: 2]
+student_book = Table(
+    'student_book',
+    Base.metadata,
+    Column('student_id', Uuid, ForeignKey('users.id', ondelete="CASCADE"), primary_key=True),
+    Column('book_id', Integer, ForeignKey('books.id', ondelete="CASCADE"), primary_key=True)
+)
 
-from .base import Base
+class Book(Base):
+    __tablename__ = "books"
 
+    id = Column(Integer, primary_key=True, index=True)
+    board = Column(String, index=True)  # e.g., CBSE, State Board [source: 2]
+    class_name = Column(String, index=True)  # e.g., Class 9 [source: 2]
+    subject = Column(String, index=True)  # e.g., Science [source: 2]
+    publisher = Column(String, index=True)  # e.g., NCERT [source: 2]
+    edition = Column(String, nullable=True)
+    is_customized = Column(Boolean, default=False)  # [source: 2]
+    school = Column(String, nullable=True)  # [source: 2]
+    variant_of_id = Column(Integer, ForeignKey("books.id"), nullable=True)  # [source: 2]
 
-class ChapterStatus(str, enum.Enum):
-    uploaded = "uploaded"
-    processing = "processing"
-    ready = "ready"
-    failed = "failed"
-
-
-class Subject(Base):
-    """A teacher's reusable content library entry. Not tied to any single room."""
-
-    __tablename__ = "subjects"
-    __table_args__ = (UniqueConstraint("teacher_id", "name", name="uq_subject_teacher_name"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    teacher_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    name: Mapped[str] = mapped_column(String(100))
-    grade: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
+    chapters = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
+    variants = relationship("Book", backref="base_book", remote_side=[id])
+    students = relationship("User", secondary=student_book, back_populates="books")
 
 class Chapter(Base):
     __tablename__ = "chapters"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
-    title: Mapped[str] = mapped_column(String(200))
-    position: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[ChapterStatus] = mapped_column(
-        Enum(ChapterStatus, name="chapter_status"), default=ChapterStatus.uploaded
-    )
-    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String, index=True)
+    sequence_num = Column(Integer)
 
+    book = relationship("Book", back_populates="chapters")
+    pages = relationship("Page", back_populates="chapter", cascade="all, delete-orphan")
 
-class RoomSubject(Base):
-    """Rooms reference library subjects; content is never copied into a room."""
+class Page(Base):
+    __tablename__ = "pages"
 
-    __tablename__ = "room_subjects"
-    __table_args__ = (UniqueConstraint("room_id", "subject_id", name="uq_room_subject"),)
+    id = Column(Integer, primary_key=True, index=True)
+    chapter_id = Column(Integer, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
+    page_number = Column(Integer)
+    content_text = Column(Text, nullable=False)
+    layout_data = Column(JSON, nullable=True)  # Azure Document Intelligence layout data [source: 2]
+    image_url = Column(String, nullable=True)
+    verified = Column(Boolean, default=False)  # Teacher = verified, Student = unverified [source: 2]
+    uploaded_by_id = Column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    fingerprint = Column(String, nullable=True)  # MinHash signature [source: 2]
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    room_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    
-class ChapterExtraction(Base):
-    """OCR output cached by file hash. Shared across every chapter (any subject)
-    that uploads the same file, so OCR never runs twice for identical content."""
+    chapter = relationship("Chapter", back_populates="pages")
+    concepts = relationship("Concept", back_populates="page", cascade="all, delete-orphan")
 
-    __tablename__ = "chapter_extractions"
+class Concept(Base):
+    __tablename__ = "concepts"
 
-    file_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    text: Mapped[str] = mapped_column(Text)
-    page_count: Mapped[int] = mapped_column(Integer, default=0)
-    provider: Mapped[str] = mapped_column(String(20), default="fake")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    
-class ChapterConcepts(Base):
-    """Concept graph cached by file hash, shared by every chapter with identical content."""
+    id = Column(Integer, primary_key=True, index=True)
+    page_id = Column(Integer, ForeignKey("pages.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, index=True)
+    description = Column(Text)
+    learning_objectives = Column(JSON, nullable=True)
+    prerequisites = Column(JSON, nullable=True)
 
-    __tablename__ = "chapter_concepts"
-
-    file_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    graph: Mapped[dict] = mapped_column(JSON)
-    model: Mapped[str] = mapped_column(String(80), default="fake")
-    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
-    review_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    page = relationship("Page", back_populates="concepts")
