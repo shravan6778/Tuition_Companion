@@ -45,3 +45,13 @@ label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 4px; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+
+/* Status badges: always an icon + label, never color alone */
+.status { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); background: #f5f5f4; color: var(--muted); }
+.status.ready { background: #f0fdf4; color: var(--success); border-color: #bbf7d0; }
+.status.processing { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.status.failed { background: #fff7ed; color: var(--warn); border-color: #fed7aa; }
+
+.back-link { display: inline-block; margin-bottom: 8px; color: var(--primary); font-size: 14px; text-decoration: none; }
+.btn.small-btn { min-height: 36px; padding: 4px 12px; }
+.btn.danger { background: transparent; color: var(--warn); border: 1px solid var(--warn); }

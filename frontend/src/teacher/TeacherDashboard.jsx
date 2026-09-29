@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../shared/api";
 import Header from "../shared/Header";
+import { Link } from "react-router-dom";
 
 export default function TeacherDashboard() {
   const [rooms, setRooms] = useState(null);
@@ -12,6 +13,7 @@ export default function TeacherDashboard() {
     api("/teacher/rooms")
       .then(setRooms)
       .catch((e) => setError(e.message));
+
   useEffect(() => {
     load();
   }, []);
@@ -19,11 +21,13 @@ export default function TeacherDashboard() {
   async function create(e) {
     e.preventDefault();
     setError("");
+
     try {
       await api("/teacher/rooms", {
         method: "POST",
         body: { name, room_type: roomType },
       });
+
       setName("");
       load();
     } catch (err) {
@@ -35,8 +39,17 @@ export default function TeacherDashboard() {
     <div className="container">
       <Header title="Your rooms" />
 
+      <Link
+        className="btn secondary"
+        to="/teacher/library"
+        style={{ marginBottom: 16 }}
+      >
+        Content library
+      </Link>
+
       <form className="card stack" onSubmit={create}>
         <h3>Create a room</h3>
+
         <div>
           <label htmlFor="rname">Room name</label>
           <input
@@ -49,6 +62,7 @@ export default function TeacherDashboard() {
             minLength={2}
           />
         </div>
+
         <div>
           <label htmlFor="rtype">Room type</label>
           <select
@@ -61,7 +75,9 @@ export default function TeacherDashboard() {
             <option value="mixed_class">Mixed class</option>
           </select>
         </div>
+
         {error && <div className="error">{error}</div>}
+
         <button className="btn" type="submit">
           Create room
         </button>
@@ -85,23 +101,37 @@ export default function TeacherDashboard() {
                 <th>Type</th>
                 <th>Join code</th>
                 <th>Students</th>
+                <th></th>
               </tr>
             </thead>
+
             <tbody>
               {rooms.map((r) => (
                 <tr key={r.id}>
                   <td>{r.name}</td>
+
                   <td>
                     {r.room_type === "single_class"
                       ? "Single class"
                       : "Mixed class"}
                   </td>
+
                   <td>
                     <span className="code" style={{ fontSize: 16 }}>
                       {r.join_code}
                     </span>
                   </td>
+
                   <td>{r.member_count}</td>
+
+                  <td>
+                    <Link
+                      className="btn secondary small-btn"
+                      to={`/teacher/rooms/${r.id}`}
+                    >
+                      Manage content
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
