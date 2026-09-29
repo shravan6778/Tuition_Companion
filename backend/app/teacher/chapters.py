@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core import storage
 from app.core.config import settings
-from app.models import Chapter, ChapterExtraction, ChapterStatus, Subject
+from app.models import Chapter, ChapterExtraction, ChapterStatus, Subject, ChapterConcepts
 
 
 def list_chapters(db: Session, subject: Subject) -> list[Chapter]:
@@ -74,4 +74,8 @@ def delete_chapter(db: Session, subject: Subject, chapter_id: uuid.UUID) -> None
             extraction = db.get(ChapterExtraction, file_hash)
             if extraction is not None:
                 db.delete(extraction)
+                db.commit()
+            cached = db.get(ChapterConcepts, file_hash)
+            if cached is not None:
+                db.delete(cached)
                 db.commit()

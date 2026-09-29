@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, func, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -65,4 +65,16 @@ class ChapterExtraction(Base):
     text: Mapped[str] = mapped_column(Text)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     provider: Mapped[str] = mapped_column(String(20), default="fake")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    
+class ChapterConcepts(Base):
+    """Concept graph cached by file hash, shared by every chapter with identical content."""
+
+    __tablename__ = "chapter_concepts"
+
+    file_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph: Mapped[dict] = mapped_column(JSON)
+    model: Mapped[str] = mapped_column(String(80), default="fake")
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    review_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

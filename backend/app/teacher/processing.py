@@ -4,10 +4,12 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.core import storage
-from app.models import Chapter, ChapterExtraction, ChapterStatus
 from app.ocr import get_ocr_provider
 from app.core.errors import ProcessingError
 from app.core.config import settings
+from app.llm import get_llm_provider
+from app.models import Chapter, ChapterConcepts, ChapterExtraction, ChapterStatus
+from app.teacher import concepts
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,7 @@ def process_chapter(session_factory, chapter_id: uuid.UUID) -> None:
 
         try:
             text, _ = _extract_with_cache(db, chapter)
-            # _concepts_with_cache(db, chapter, text)
+            _concepts_with_cache(db, chapter, text)
         except Exception as exc:
             logger.exception("Processing failed for chapter %s", chapter_id)
             db.rollback()
@@ -58,3 +60,16 @@ def _extract_with_cache(db: Session, chapter: Chapter) -> tuple[str, int]:
     )
     db.commit()
     return result.text, result.page_count
+
+def _concepts_with_cache(db: Session, chapter: Chapter, text: str) -> None:
+    if db.get(ChapterConcepts, chapter.file_hash) is not None:
+        return  # never regenerate an existing concept graph (Rules.md)
+    provider = get_llm_provider()
+    graph, needs_review, note = concepts.extract_concepts(provider, text, settings.concept_max_chars)
+    db.merge(
+        ChapterConcepts(
+            file_hash=chapter.file_hash, graph=graph, model=provider.model_name,
+            needs_review=needs_review, review_note=note,
+        )
+    )
+    db.commit()

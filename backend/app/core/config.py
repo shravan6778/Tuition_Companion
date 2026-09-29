@@ -17,4 +17,10 @@ class Settings(BaseSettings):
     ocr_provider: str = "fake"  # "fake" for local dev/tests, "azure" for Azure Document Intelligence
     azure_doc_intel_endpoint: str = ""
     azure_doc_intel_key: str = ""
+    llm_provider: str = "fake"  # "fake" or "openai_compat" (Azure Foundry, OpenAI, etc.)
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"  # on Azure this is your DEPLOYMENT name
+    llm_timeout_s: int = 60
+    concept_max_chars: int = 60000
 settings = Settings()
