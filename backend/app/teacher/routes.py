@@ -1,21 +1,84 @@
 import uuid
-
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Response, UploadFile, status
+from typing import Optional
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
-from app.db.session import get_db, get_session_factory
-from app import content
-from app.models import ChapterStatus
-from app.schemas import AttachSubjectIn, ChapterOut, MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
-from app.teacher import chapters as chap
-from app.teacher import processing
-from app.teacher import library as lib
-from app.teacher import room_content as rc
+from app.db.session import get_db
+from app.models.content import Book, Chapter, Page, Concept
+from app.models.room import Room, RoomMember
+from app.pipeline.orchestrator import PipelineOrchestrator
+from app.schemas import MemberOut, RoomCreate, RoomOut
 from app.teacher import rooms as svc
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
 
+
+# ---------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------
+
+class BookCreate(BaseModel):
+    board: str
+    class_name: str
+    subject: str
+    publisher: str
+    edition: Optional[str] = None
+    is_customized: bool = False
+    school: Optional[str] = None
+    variant_of_id: Optional[int] = None
+
+
+class ConceptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    description: Optional[str] = None
+
+
+class PageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    chapter_id: int
+    page_number: int
+    content_text: str
+    verified: bool
+    fingerprint: Optional[str] = None
+    concepts: list[ConceptOut] = []
+
+
+class ChapterCreate(BaseModel):
+    title: str
+    sequence_num: int = 1
+
+
+class ChapterOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    book_id: int
+    title: str
+    sequence_num: int
+
+
+class BookOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    board: str
+    class_name: str
+    subject: str
+    publisher: str
+    edition: Optional[str] = None
+    is_customized: bool
+    school: Optional[str] = None
+    variant_of_id: Optional[int] = None
+    chapters: list[ChapterOut] = []
+
+
+# ---------------------------------------------------------
+# Room Management (Grouping students only - no shared content)
+# ---------------------------------------------------------
 
 @router.get("/ping")
 def ping(user=Depends(require_teacher)):
@@ -37,86 +100,126 @@ def room_members(room_id: uuid.UUID, teacher=Depends(require_teacher), db: Sessi
     room = svc.get_owned_room(db, teacher, room_id)
     return svc.list_members(db, room)
 
-@router.post("/subjects", response_model=SubjectOut, status_code=status.HTTP_201_CREATED)
-def create_subject(body: SubjectCreate, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
-    return SubjectOut.model_validate(lib.create_subject(db, teacher, body.name, body.grade))
+
+# ---------------------------------------------------------
+# Book & Content Library
+# ---------------------------------------------------------
+
+@router.post("/books", response_model=BookOut, status_code=status.HTTP_201_CREATED)
+def create_book(body: BookCreate, db: Session = Depends(get_db)):
+    book = Book(
+        board=body.board,
+        class_name=body.class_name,
+        subject=body.subject,
+        publisher=body.publisher,
+        edition=body.edition,
+        is_customized=body.is_customized,
+        school=body.school,
+        variant_of_id=body.variant_of_id,
+    )
+    db.add(book)
+    db.commit()
+    db.refresh(book)
+    return book
 
 
-@router.get("/subjects", response_model=list[SubjectOut])
-def list_subjects(teacher=Depends(require_teacher), db: Session = Depends(get_db)):
-    return lib.list_subjects(db, teacher)
+@router.get("/books", response_model=list[BookOut])
+def list_books(
+    board: Optional[str] = None,
+    class_name: Optional[str] = None,
+    subject: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    query = select(Book)
+    if board:
+        query = query.where(Book.board == board)
+    if class_name:
+        query = query.where(Book.class_name == class_name)
+    if subject:
+        query = query.where(Book.subject == subject)
+    return db.scalars(query).all()
 
-@router.post(
-    "/subjects/{subject_id}/chapters", response_model=ChapterOut, status_code=status.HTTP_201_CREATED
-)
-def upload_chapter(
-    subject_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
-    title: str = Form(min_length=2, max_length=200),
+
+@router.get("/books/{book_id}", response_model=BookOut)
+def get_book(book_id: int, db: Session = Depends(get_db)):
+    book = db.scalar(select(Book).where(Book.id == book_id))
+    if not book:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Book not found")
+    return book
+
+
+# ---------------------------------------------------------
+# Chapters
+# ---------------------------------------------------------
+
+@router.post("/books/{book_id}/chapters", response_model=ChapterOut, status_code=status.HTTP_201_CREATED)
+def create_chapter(book_id: int, body: ChapterCreate, db: Session = Depends(get_db)):
+    book = db.scalar(select(Book).where(Book.id == book_id))
+    if not book:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Book not found")
+    chapter = Chapter(book_id=book.id, title=body.title, sequence_num=body.sequence_num)
+    db.add(chapter)
+    db.commit()
+    db.refresh(chapter)
+    return chapter
+
+
+@router.get("/books/{book_id}/chapters", response_model=list[ChapterOut])
+def list_chapters(book_id: int, db: Session = Depends(get_db)):
+    return db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.sequence_num)).all()
+
+
+# ---------------------------------------------------------
+# Pages & Pipeline Uploads
+# ---------------------------------------------------------
+
+@router.post("/books/{book_id}/chapters/{chapter_id}/pages/upload", response_model=list[PageOut])
+async def teacher_upload_pages(
+    book_id: int,
+    chapter_id: int,
     file: UploadFile = File(...),
     teacher=Depends(require_teacher),
     db: Session = Depends(get_db),
-    session_factory=Depends(get_session_factory),
 ):
-    subject = lib.get_owned_subject(db, teacher, subject_id)
-    chapter = chap.upload_chapter(db, subject, title.strip(), file)
-    background_tasks.add_task(processing.process_chapter, session_factory, chapter.id)
-    return chapter
+    chapter = db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.book_id == book_id))
+    if not chapter:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found in this book")
 
-@router.get("/subjects/{subject_id}/chapters", response_model=list[ChapterOut])
-def list_chapters(subject_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
-    subject = lib.get_owned_subject(db, teacher, subject_id)
-    return chap.list_chapters(db, subject)
+    orchestrator = PipelineOrchestrator(db)
+    file_bytes = await file.read()
+    filename = file.filename or "file.pdf"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "pdf"
 
-@router.post("/rooms/{room_id}/subjects", response_model=list[SubjectOut], status_code=status.HTTP_201_CREATED)
-def attach_subject(
-    room_id: uuid.UUID, body: AttachSubjectIn, teacher=Depends(require_teacher), db: Session = Depends(get_db)
-):
-    room = svc.get_owned_room(db, teacher, room_id)
-    subject = lib.get_owned_subject(db, teacher, body.subject_id)
-    rc.attach_subject(db, room, subject)
-    return content.list_room_subjects(db, room.id)
-
-
-@router.get("/rooms/{room_id}/subjects", response_model=list[SubjectOut])
-def room_subjects(room_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
-    room = svc.get_owned_room(db, teacher, room_id)
-    return content.list_room_subjects(db, room.id)
+    pages = await orchestrator.process_upload(
+        file_bytes=file_bytes,
+        ext=ext,
+        metadata={"book_id": book_id, "chapter_id": chapter_id},
+        user_id=teacher.id,
+        is_teacher=True,  # Deliberate upload: treated as verified
+    )
+    return pages
 
 
-@router.delete("/rooms/{room_id}/subjects/{subject_id}", status_code=status.HTTP_204_NO_CONTENT)
-def detach_subject(
-    room_id: uuid.UUID, subject_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)
-):
-    room = svc.get_owned_room(db, teacher, room_id)
-    rc.detach_subject(db, room, subject_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.get("/books/{book_id}/chapters/{chapter_id}/pages", response_model=list[PageOut])
+def list_chapter_pages(book_id: int, chapter_id: int, db: Session = Depends(get_db)):
+    return db.scalars(
+        select(Page).where(Page.chapter_id == chapter_id).order_by(Page.page_number)
+    ).all()
 
-@router.delete("/subjects/{subject_id}/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_chapter(
-    subject_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)
-):
-    subject = lib.get_owned_subject(db, teacher, subject_id)
-    chap.delete_chapter(db, subject, chapter_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-@router.post(
-    "/subjects/{subject_id}/chapters/{chapter_id}/retry",
-    response_model=ChapterOut,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def retry_chapter(
-    subject_id: uuid.UUID,
-    chapter_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
-    teacher=Depends(require_teacher),
-    db: Session = Depends(get_db),
-    session_factory=Depends(get_session_factory),
-):
-    subject = lib.get_owned_subject(db, teacher, subject_id)
-    chapter = chap.get_owned_chapter(db, subject, chapter_id)
-    if chapter.status != ChapterStatus.failed:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Only a failed chapter can be retried")
-    # process_chapter itself flips uploaded/failed -> processing, so don't set it here.
-    background_tasks.add_task(processing.process_chapter, session_factory, chapter.id)
-    return chapter
+@router.get("/pages/unverified", response_model=list[PageOut])
+def list_unverified_pages(db: Session = Depends(get_db)):
+    """List student-contributed unverified pages needing teacher confirmation."""
+    return db.scalars(select(Page).where(Page.verified == False).order_by(Page.id.desc())).all()
+
+
+@router.post("/pages/{page_id}/verify", response_model=PageOut)
+def verify_page(page_id: int, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Teacher confirms an unverified student-contributed page."""
+    page = db.scalar(select(Page).where(Page.id == page_id))
+    if not page:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    page.verified = True
+    db.commit()
+    db.refresh(page)
+    return page
