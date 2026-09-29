@@ -6,28 +6,34 @@ from sqlalchemy.orm import Session
 from app.core import storage
 from app.models import Chapter, ChapterExtraction, ChapterStatus
 from app.ocr import get_ocr_provider
+from app.core.errors import ProcessingError
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 def process_chapter(session_factory, chapter_id: uuid.UUID) -> None:
-    """Runs as a background task after upload or retry. Opens its own session because
-    the request's session may already be closed by the time this runs."""
     with session_factory() as db:
         chapter = db.get(Chapter, chapter_id)
         if chapter is None or chapter.status not in (ChapterStatus.uploaded, ChapterStatus.failed):
-            return  # nothing to do, or a concurrent run already handled it
+            return
 
         chapter.status = ChapterStatus.processing
         chapter.error_message = None
         db.commit()
 
         try:
-            text, page_count = _extract_with_cache(db, chapter)
-        except Exception:
-            logger.exception("OCR failed for chapter %s", chapter_id)
+            text, _ = _extract_with_cache(db, chapter)
+            # _concepts_with_cache(db, chapter, text)
+        except Exception as exc:
+            logger.exception("Processing failed for chapter %s", chapter_id)
+            db.rollback()
+            chapter = db.get(Chapter, chapter_id)
             chapter.status = ChapterStatus.failed
-            chapter.error_message = "Couldn't process this file. Please re-upload it or try again."
+            chapter.error_message = (
+                str(exc) if isinstance(exc, ProcessingError)
+                else "Couldn't process this file. Please re-upload it or try again."
+            )
             db.commit()
             return
 
@@ -47,7 +53,7 @@ def _extract_with_cache(db: Session, chapter: Chapter) -> tuple[str, int]:
 
     db.merge(
         ChapterExtraction(
-            file_hash=chapter.file_hash, text=result.text, page_count=result.page_count, provider="ocr"
+            file_hash=chapter.file_hash, text=result.text, page_count=result.page_count, provider=settings.ocr_provider
         )
     )
     db.commit()
