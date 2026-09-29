@@ -2,7 +2,8 @@ import uuid
 
 from sqlalchemy import update
 
-from app.models import Chapter, ChapterStatus, Role
+from app.models import Role
+from app.teacher import processing
 from tests.test_chapters import PDF, PDF_2, make_subject, upload
 from tests.test_library import add_user
 
@@ -10,11 +11,6 @@ from tests.test_library import add_user
 def make_room(client, headers, name="Class 10") -> dict:
     return client.post("/teacher/rooms", json={"name": name, "room_type": "single_class"}, headers=headers).json()
 
-
-def mark_ready(session_factory, chapter_id: str):
-    with session_factory() as db:
-        db.execute(update(Chapter).where(Chapter.id == uuid.UUID(chapter_id)).values(status=ChapterStatus.ready))
-        db.commit()
 
 
 def test_attach_list_and_detach_keeps_library_content(client, session_factory):
@@ -55,25 +51,27 @@ def test_teacher_cannot_attach_someone_elses_subject_or_room(client, session_fac
     assert client.post(f"/teacher/rooms/{room_a['id']}/subjects", json={"subject_id": sid_a}, headers=b).status_code == 404
 
 
-def test_student_sees_only_ready_chapters_without_internals(client, session_factory):
+def test_student_sees_only_ready_chapters_without_internals(client, session_factory, monkeypatch):
+    class BoomProvider:
+        def extract(self, data, ext):
+            raise RuntimeError("provider unavailable")
+
     t = add_user(session_factory, Role.teacher)
     s = add_user(session_factory, Role.student)
     room, sid = make_room(client, t), make_subject(client, t)
-    ch1 = upload(client, t, sid, "Ch 1", PDF).json()
-    upload(client, t, sid, "Ch 2", PDF_2)  # stays 'uploaded'
+    upload(client, t, sid, "Ch 1", PDF)  # succeeds -> ready
+
+    monkeypatch.setattr(processing, "get_ocr_provider", lambda: BoomProvider())
+    upload(client, t, sid, "Ch 2", PDF_2)  # fails -> not shown to students
+
     client.post(f"/teacher/rooms/{room['id']}/subjects", json={"subject_id": sid}, headers=t)
     client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=s)
 
     subjects = client.get(f"/student/rooms/{room['id']}/subjects", headers=s).json()
-    assert subjects[0]["chapter_count"] == 0  # nothing ready yet
-    assert client.get(f"/student/rooms/{room['id']}/subjects/{sid}/chapters", headers=s).json() == []
-
-    mark_ready(session_factory, ch1["id"])
-    assert client.get(f"/student/rooms/{room['id']}/subjects", headers=s).json()[0]["chapter_count"] == 1
+    assert subjects[0]["chapter_count"] == 1  # only the ready chapter counts
     chapters = client.get(f"/student/rooms/{room['id']}/subjects/{sid}/chapters", headers=s).json()
     assert [c["title"] for c in chapters] == ["Ch 1"]
     assert set(chapters[0]) == {"id", "title", "position"}
-
 
 def test_student_outside_the_room_gets_404(client, session_factory):
     t = add_user(session_factory, Role.teacher)

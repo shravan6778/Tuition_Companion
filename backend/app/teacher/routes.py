@@ -1,13 +1,15 @@
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
-from app.db.session import get_db
+from app.db.session import get_db, get_session_factory
 from app import content
+from app.models import ChapterStatus
 from app.schemas import AttachSubjectIn, ChapterOut, MemberOut, RoomCreate, RoomOut, SubjectCreate, SubjectOut
 from app.teacher import chapters as chap
+from app.teacher import processing
 from app.teacher import library as lib
 from app.teacher import room_content as rc
 from app.teacher import rooms as svc
@@ -49,14 +51,17 @@ def list_subjects(teacher=Depends(require_teacher), db: Session = Depends(get_db
 )
 def upload_chapter(
     subject_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     title: str = Form(min_length=2, max_length=200),
     file: UploadFile = File(...),
     teacher=Depends(require_teacher),
     db: Session = Depends(get_db),
+    session_factory=Depends(get_session_factory),
 ):
     subject = lib.get_owned_subject(db, teacher, subject_id)
-    return chap.upload_chapter(db, subject, title.strip(), file)
-
+    chapter = chap.upload_chapter(db, subject, title.strip(), file)
+    background_tasks.add_task(processing.process_chapter, session_factory, chapter.id)
+    return chapter
 
 @router.get("/subjects/{subject_id}/chapters", response_model=list[ChapterOut])
 def list_chapters(subject_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
@@ -94,3 +99,24 @@ def delete_chapter(
     subject = lib.get_owned_subject(db, teacher, subject_id)
     chap.delete_chapter(db, subject, chapter_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+@router.post(
+    "/subjects/{subject_id}/chapters/{chapter_id}/retry",
+    response_model=ChapterOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def retry_chapter(
+    subject_id: uuid.UUID,
+    chapter_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+    session_factory=Depends(get_session_factory),
+):
+    subject = lib.get_owned_subject(db, teacher, subject_id)
+    chapter = chap.get_owned_chapter(db, subject, chapter_id)
+    if chapter.status != ChapterStatus.failed:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only a failed chapter can be retried")
+    # process_chapter itself flips uploaded/failed -> processing, so don't set it here.
+    background_tasks.add_task(processing.process_chapter, session_factory, chapter.id)
+    return chapter

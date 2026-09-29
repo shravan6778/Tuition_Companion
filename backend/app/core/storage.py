@@ -43,3 +43,6 @@ def delete_file(rel_path: str) -> None:
     if root not in target.parents:
         return
     target.unlink(missing_ok=True)
+    
+def read_file(rel_path: str) -> bytes:
+    return (Path(settings.storage_dir) / rel_path).read_bytes()

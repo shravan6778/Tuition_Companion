@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.auth.dependencies import session_dependency
-from app.db.session import get_db
+from app.db.session import get_db, get_session_factory
 from app.main import app
 from app.models import Base
 
@@ -49,6 +49,7 @@ def client(session_factory):
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[session_dependency] = override_session
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
     yield TestClient(app)
     app.dependency_overrides.clear()
     

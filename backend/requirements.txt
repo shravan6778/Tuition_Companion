@@ -8,3 +8,5 @@ supertokens-python
 pytest
 httpx
 python-multipart
+pypdf
+azure-ai-documentintelligence  # uncomment when OCR_PROVIDER=azure

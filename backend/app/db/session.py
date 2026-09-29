@@ -13,3 +13,8 @@ def get_db():
         yield db
     finally:
         db.close()
+        
+def get_session_factory():
+    """Lets background tasks open their own session using the same factory the
+    request used. Overridden in tests so background work hits the test database."""
+    return SessionLocal

@@ -33,6 +33,12 @@ export default function SubjectDetail() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (!chapters?.some((c) => c.status === "processing")) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [chapters, load]);
+
   function pickFile(e) {
     const f = e.target.files[0] ?? null;
     setError("");
@@ -81,7 +87,17 @@ export default function SubjectDetail() {
       setError(err.message);
     }
   }
-
+  async function retry(chapter) {
+    setError("");
+    try {
+      await api(`/teacher/subjects/${subjectId}/chapters/${chapter.id}/retry`, {
+        method: "POST",
+      });
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
   return (
     <div className="container">
       <Link className="back-link" to="/teacher/library">
@@ -157,7 +173,15 @@ export default function SubjectDetail() {
                       <div className="small">{c.error_message}</div>
                     )}
                   </td>
-                  <td>
+                  <td style={{ display: "flex", gap: 8 }}>
+                    {c.status === "failed" && (
+                      <button
+                        className="btn secondary small-btn"
+                        onClick={() => retry(c)}
+                      >
+                        Retry
+                      </button>
+                    )}
                     <button
                       className="btn danger small-btn"
                       onClick={() => remove(c)}

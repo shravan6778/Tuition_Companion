@@ -14,5 +14,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     storage_dir: str = "storage"
     max_upload_mb: int = 20
-
+    ocr_provider: str = "fake"  # "fake" for local dev/tests, "azure" for Azure Document Intelligence
+    azure_doc_intel_endpoint: str = ""
+    azure_doc_intel_key: str = ""
 settings = Settings()

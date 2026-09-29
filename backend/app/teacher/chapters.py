@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core import storage
 from app.core.config import settings
-from app.models import Chapter, ChapterStatus, Subject
+from app.models import Chapter, ChapterExtraction, ChapterStatus, Subject
 
 
 def list_chapters(db: Session, subject: Subject) -> list[Chapter]:
@@ -50,10 +50,15 @@ def upload_chapter(db: Session, subject: Subject, title: str, upload: UploadFile
     db.refresh(chapter)
     return chapter
 
-def delete_chapter(db: Session, subject: Subject, chapter_id: uuid.UUID) -> None:
+def get_owned_chapter(db: Session, subject: Subject, chapter_id: uuid.UUID) -> Chapter:
     chapter = db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.subject_id == subject.id))
     if chapter is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
+    return chapter
+
+
+def delete_chapter(db: Session, subject: Subject, chapter_id: uuid.UUID) -> None:
+    chapter = get_owned_chapter(db, subject, chapter_id)
     if chapter.status == ChapterStatus.processing:
         raise HTTPException(status.HTTP_409_CONFLICT, "This chapter is being processed. Try again in a moment.")
 
@@ -66,3 +71,7 @@ def delete_chapter(db: Session, subject: Subject, chapter_id: uuid.UUID) -> None
         still_used = db.scalar(select(Chapter.id).where(Chapter.file_hash == file_hash).limit(1))
         if still_used is None:
             storage.delete_file(file_path)
+            extraction = db.get(ChapterExtraction, file_hash)
+            if extraction is not None:
+                db.delete(extraction)
+                db.commit()

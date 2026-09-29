@@ -54,3 +54,15 @@ class RoomSubject(Base):
     room_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    
+class ChapterExtraction(Base):
+    """OCR output cached by file hash. Shared across every chapter (any subject)
+    that uploads the same file, so OCR never runs twice for identical content."""
+
+    __tablename__ = "chapter_extractions"
+
+    file_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    page_count: Mapped[int] = mapped_column(Integer, default=0)
+    provider: Mapped[str] = mapped_column(String(20), default="fake")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
