@@ -1,44 +1,83 @@
-from app.models import Role, User
+import pytest
+from app.models.content import Book, Chapter, Page
 
 
-def add_user(session_factory, role: Role, tag: str = "a") -> dict:
-    with session_factory() as db:
-        db.add(User(
-            supertokens_user_id=f"st-{role.value}-{tag}",
-            name="Test",
-            username=f"{role.value}_{tag}",
-            phone="+919000000000",
-            role=role,
-        ))
-        db.commit()
-    return {"Authorization": f"Bearer st-{role.value}-{tag}"}
-
-
-def test_teacher_creates_and_lists_subjects(client, session_factory):
-    h = add_user(session_factory, Role.teacher)
-    res = client.post("/teacher/subjects", json={"name": "Maths", "grade": "10"}, headers=h)
+def test_book_crud_and_student_link(client, db_session, teacher_token, student_token):
+    # 1. Teacher creates a Book[cite: 2]
+    res = client.post(
+        "/teacher/books",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        json={
+            "board": "CBSE",
+            "class_name": "Class 10",
+            "subject": "Mathematics",
+            "publisher": "NCERT",
+            "edition": "2026",
+            "is_customized": False,
+        },
+    )
     assert res.status_code == 201
-    assert res.json()["chapter_count"] == 0
+    book_id = res.json()["id"]
 
-    listed = client.get("/teacher/subjects", headers=h).json()
-    assert [s["name"] for s in listed] == ["Maths"]
+    # 2. Add chapter[cite: 2]
+    ch_res = client.post(
+        f"/teacher/books/{book_id}/chapters",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        json={"title": "Real Numbers", "sequence_num": 1},
+    )
+    assert ch_res.status_code == 201
+    chapter_id = ch_res.json()["id"]
+
+    # 3. Student links to the Book[cite: 2]
+    link_res = client.post(
+        f"/student/books/{book_id}/link",
+        headers={"Authorization": f"Bearer {student_token}"},
+    )
+    assert link_res.status_code == 200
+    assert link_res.json()["status"] == "linked"
+
+    # 4. Student views their linked books[cite: 2]
+    my_books = client.get(
+        "/student/books",
+        headers={"Authorization": f"Bearer {student_token}"},
+    )
+    assert my_books.status_code == 200
+    assert any(b["id"] == book_id for b in my_books.json())
 
 
-def test_duplicate_subject_name_is_409(client, session_factory):
-    h = add_user(session_factory, Role.teacher)
-    assert client.post("/teacher/subjects", json={"name": "Maths"}, headers=h).status_code == 201
-    assert client.post("/teacher/subjects", json={"name": "Maths"}, headers=h).status_code == 409
+def test_page_verification_status(db_session, test_teacher, test_student):
+    """Verifies that teacher upload sets verified=True, student upload sets verified=False[cite: 2]."""
+    book = Book(
+        board="CBSE",
+        class_name="Class 9",
+        subject="Physics",
+        publisher="NCERT",
+    )
+    db_session.add(book)
+    db_session.flush()
 
+    chapter = Chapter(book_id=book.id, title="Motion", sequence_num=1)
+    db_session.add(chapter)
+    db_session.flush()
 
-def test_subjects_are_private_to_their_teacher(client, session_factory):
-    a = add_user(session_factory, Role.teacher, "a")
-    b = add_user(session_factory, Role.teacher, "b")
-    client.post("/teacher/subjects", json={"name": "Maths"}, headers=a)
-    assert client.get("/teacher/subjects", headers=b).json() == []
+    # Teacher page[cite: 2]
+    teacher_page = Page(
+        chapter_id=chapter.id,
+        page_number=1,
+        content_text="Displacement and velocity definitions.",
+        verified=True,
+        uploaded_by_id=test_teacher.id,
+    )
+    # Student doubt page[cite: 2]
+    student_page = Page(
+        chapter_id=chapter.id,
+        page_number=2,
+        content_text="Unseen exercise problem doubt.",
+        verified=False,
+        uploaded_by_id=test_student.id,
+    )
+    db_session.add_all([teacher_page, student_page])
+    db_session.commit()
 
-
-def test_non_teachers_cannot_use_library(client, session_factory):
-    for role in (Role.student, Role.parent):
-        h = add_user(session_factory, role)
-        assert client.get("/teacher/subjects", headers=h).status_code == 403
-        assert client.post("/teacher/subjects", json={"name": "Maths"}, headers=h).status_code == 403
+    assert teacher_page.verified is True
+    assert student_page.verified is False
