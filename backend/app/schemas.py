@@ -46,6 +46,24 @@ class MemberOut(BaseModel):
     joined_at: datetime
 
 
+class RoomBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    name: str
+
+
+# --- Parent Schemas ---
+class LinkStudentIn(BaseModel):
+    link_code: str = Field(min_length=4, max_length=12)
+
+
+class ChildOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    name: str
+    rooms: list[RoomBrief] = []
+
+
 # --- Book, Chapter, Page, Concept Schemas ---
 class ConceptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
