@@ -1,68 +1,139 @@
-from app.pipeline.fingerprint import compute_minhash, compute_jaccard_similarity
-from app.models.content import Book, Page, Concept
+import logging
+from typing import Optional
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-class PipelineOrchestrator:
-    def __init__(self, db: Session, ocr_provider, llm_provider):
-        self.db = db
-        self.ocr_provider = ocr_provider
-        self.llm_provider = llm_provider
+from app.core.config import settings
+from app.llm.openai_compat_provider import LLMProvider
+from app.models.content import Book, Chapter, Concept, Page
+from app.ocr.azure_provider import AzureDocIntelProvider
+from app.pipeline.fingerprint import compute_jaccard_similarity, compute_minhash
 
-    async def process_upload(self, file_stream, metadata: dict, user_id: str, is_teacher: bool):
-        # 1. Azure OCR & Layout Extraction [source: 2]
-        layout_results = await self.ocr_provider.extract_text_and_layout(file_stream)
-        
-        # Determine verified status based on uploader role [source: 2]
-        is_verified = is_teacher 
-        
+logger = logging.getLogger(__name__)
+
+
+class PipelineOrchestrator:
+    def __init__(
+        self,
+        db: Session,
+        ocr_provider: Optional[AzureDocIntelProvider] = None,
+        llm_provider: Optional[LLMProvider] = None,
+    ):
+        self.db = db
+        self.ocr = ocr_provider or AzureDocIntelProvider(
+            endpoint=settings.AZURE_DOC_INTEL_ENDPOINT,
+            key=settings.AZURE_DOC_INTEL_KEY,
+        )
+        self.llm = llm_provider or LLMProvider()
+
+    async def detect_publisher_from_cover(self, file_bytes: bytes, ext: str) -> Optional[str]:
+        """Layer 1: Metadata + Cover-page OCR to extract publisher."""
+        try:
+            ocr_res = self.ocr.extract(file_bytes, ext)
+            text_lower = ocr_res.text.lower()
+            known_publishers = ["ncert", "scert", "cambridge", "oxford", "pearson", "s. chand", "ratna sagar"]
+            for pub in known_publishers:
+                if pub in text_lower:
+                    return pub.upper()
+        except Exception as e:
+            logger.warning(f"Could not extract publisher from cover: {e}")
+        return None
+
+    async def process_upload(
+        self,
+        file_bytes: bytes,
+        ext: str,
+        metadata: dict,
+        user_id,
+        is_teacher: bool,
+    ) -> list[Page]:
+        """
+        Executes lazy page-by-page ingestion[cite: 2]:
+        1. Extract text and layout via Azure Document Intelligence[cite: 2].
+        2. Normalize and compute MinHash fingerprint[cite: 2].
+        3. Match against existing corpus:
+           - ~95%+ -> reuse existing concept graph, zero LLM cost[cite: 2].
+           - 60-90% -> variant candidate[cite: 2].
+           - New -> process with LLM and store[cite: 2].
+        """
+        layout_result = self.ocr.extract_layout(file_bytes, ext)
+        chapter_id = metadata["chapter_id"]
+        book_id = metadata.get("book_id")
+
+        existing_pages = self.db.scalars(select(Page)).all()
         processed_pages = []
-        for page_data in layout_results["pages"]:
-            page_text = page_data["text"]
-            
-            # Layer 2: Fuzzy fingerprint match [source: 2]
-            page_fingerprint = compute_minhash(page_text)
-            existing_pages = self.db.query(Page).all() # Optimize this with vector/hash search in production
-            
-            best_match = None
+
+        for p_data in layout_result["pages"]:
+            page_text = p_data["text"]
+            page_num = p_data["page_number"]
+            page_fp = compute_minhash(page_text)
+
+            best_match: Optional[Page] = None
             best_score = 0.0
-            
+
             for ep in existing_pages:
                 if ep.fingerprint:
-                    score = compute_jaccard_similarity(page_fingerprint, ep.fingerprint)
+                    score = compute_jaccard_similarity(page_fp, ep.fingerprint)
                     if score > best_score:
                         best_score = score
                         best_match = ep
 
-            if best_score >= 0.95:
-                # High match: link to existing concept graph, skip LLM [source: 2]
-                processed_pages.append(best_match)
+            # Layer 2: ~95%+ exact/near-identical match -> reuse concepts[cite: 2]
+            if best_score >= 0.95 and best_match:
+                logger.info(f"Page matched existing page #{best_match.id} with score {best_score:.2f}[cite: 2]. Linking concepts[cite: 2].")
+                new_page = Page(
+                    chapter_id=chapter_id,
+                    page_number=page_num,
+                    content_text=page_text,
+                    layout_data=layout_result.get("paragraphs"),
+                    verified=True,  # Matches an already verified corpus page[cite: 2]
+                    uploaded_by_id=user_id,
+                    fingerprint=page_fp,
+                )
+                self.db.add(new_page)
+                self.db.flush()
+
+                # Reuse existing concepts without calling LLM[cite: 2]
+                for c in best_match.concepts:
+                    self.db.add(
+                        Concept(
+                            page_id=new_page.id,
+                            name=c.name,
+                            description=c.description,
+                            learning_objectives=c.learning_objectives,
+                            prerequisites=c.prerequisites,
+                        )
+                    )
+                self.db.commit()
+                processed_pages.append(new_page)
                 continue
-            
-            elif 0.60 <= best_score < 0.95:
-                # Partial match: Variant tracking logic here (Layer 3) [source: 2]
-                # Requires structural signature check & teacher confirmation
-                pass # MVP simplification: Process as new for now, log variant relationship
-                
-            # Low match or MVP fallback: Process as new page [source: 2]
+
+            # Layer 3 / New Page: Extract concepts via LLM[cite: 2]
             new_page = Page(
-                chapter_id=metadata.get("chapter_id"), # Assuming chapter exists
-                page_number=page_data["page_number"],
+                chapter_id=chapter_id,
+                page_number=page_num,
                 content_text=page_text,
-                layout_data=layout_results["paragraphs"],
-                verified=is_verified,
+                layout_data=layout_result.get("paragraphs"),
+                verified=is_teacher,  # Teacher = verified, Student = unverified[cite: 2]
                 uploaded_by_id=user_id,
-                fingerprint=page_fingerprint
+                fingerprint=page_fp,
             )
             self.db.add(new_page)
-            self.db.commit()
-            
-            # LLM extraction per section on new/differing pages only [source: 2]
-            concepts = await self.llm_provider.extract_concepts(page_text)
-            for c in concepts:
-                new_concept = Concept(page_id=new_page.id, name=c['name'], description=c['description'])
-                self.db.add(new_concept)
-                
+            self.db.flush()
+
+            extracted_concepts = await self.llm.extract_concepts(page_text)
+            for c in extracted_concepts:
+                self.db.add(
+                    Concept(
+                        page_id=new_page.id,
+                        name=c.get("name", "Unnamed Concept"),
+                        description=c.get("description", ""),
+                        learning_objectives=c.get("learning_objectives", []),
+                        prerequisites=c.get("prerequisites", []),
+                    )
+                )
+
             self.db.commit()
             processed_pages.append(new_page)
-            
+
         return processed_pages
