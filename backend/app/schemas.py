@@ -49,7 +49,7 @@ class MemberOut(BaseModel):
 # --- Book, Chapter, Page, Concept Schemas ---
 class ConceptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+    id: uuid.UUID
     name: str
     description: Optional[str] = None
     learning_objectives: Optional[list[str]] = None
@@ -58,8 +58,8 @@ class ConceptOut(BaseModel):
 
 class PageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
-    chapter_id: int
+    id: uuid.UUID
+    chapter_id: uuid.UUID
     page_number: int
     content_text: str
     verified: bool
@@ -74,8 +74,8 @@ class ChapterCreate(BaseModel):
 
 class ChapterOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
-    book_id: int
+    id: uuid.UUID
+    book_id: uuid.UUID
     title: str
     sequence_num: int
 
@@ -88,12 +88,12 @@ class BookCreate(BaseModel):
     edition: Optional[str] = None
     is_customized: bool = False
     school: Optional[str] = None
-    variant_of_id: Optional[int] = None
+    variant_of_id: Optional[uuid.UUID] = None
 
 
 class BookOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+    id: uuid.UUID
     board: str
     class_name: str
     subject: str
@@ -101,5 +101,5 @@ class BookOut(BaseModel):
     edition: Optional[str] = None
     is_customized: bool
     school: Optional[str] = None
-    variant_of_id: Optional[int] = None
+    variant_of_id: Optional[uuid.UUID] = None
     chapters: list[ChapterOut] = []

@@ -1,3 +1,4 @@
+import uuid
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON, Text, Table, Uuid
 from sqlalchemy.orm import relationship
 from app.models.base import Base
@@ -7,13 +8,13 @@ student_book = Table(
     'student_book',
     Base.metadata,
     Column('student_id', Uuid, ForeignKey('users.id', ondelete="CASCADE"), primary_key=True),
-    Column('book_id', Integer, ForeignKey('books.id', ondelete="CASCADE"), primary_key=True)
+    Column('book_id', Uuid, ForeignKey('books.id', ondelete="CASCADE"), primary_key=True)
 )
 
 class Book(Base):
     __tablename__ = "books"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
     board = Column(String, index=True)  # e.g., CBSE, State Board [source: 2]
     class_name = Column(String, index=True)  # e.g., Class 9 [source: 2]
     subject = Column(String, index=True)  # e.g., Science [source: 2]
@@ -21,7 +22,7 @@ class Book(Base):
     edition = Column(String, nullable=True)
     is_customized = Column(Boolean, default=False)  # [source: 2]
     school = Column(String, nullable=True)  # [source: 2]
-    variant_of_id = Column(Integer, ForeignKey("books.id"), nullable=True)  # [source: 2]
+    variant_of_id = Column(Uuid, ForeignKey("books.id"), nullable=True)  # [source: 2]
 
     chapters = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
     variants = relationship("Book", backref="base_book", remote_side=[id])
@@ -30,8 +31,8 @@ class Book(Base):
 class Chapter(Base):
     __tablename__ = "chapters"
 
-    id = Column(Integer, primary_key=True, index=True)
-    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
+    book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
     title = Column(String, index=True)
     sequence_num = Column(Integer)
 
@@ -41,8 +42,8 @@ class Chapter(Base):
 class Page(Base):
     __tablename__ = "pages"
 
-    id = Column(Integer, primary_key=True, index=True)
-    chapter_id = Column(Integer, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
+    chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
     page_number = Column(Integer)
     content_text = Column(Text, nullable=False)
     layout_data = Column(JSON, nullable=True)  # Azure Document Intelligence layout data [source: 2]
@@ -57,8 +58,8 @@ class Page(Base):
 class Concept(Base):
     __tablename__ = "concepts"
 
-    id = Column(Integer, primary_key=True, index=True)
-    page_id = Column(Integer, ForeignKey("pages.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
+    page_id = Column(Uuid, ForeignKey("pages.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, index=True)
     description = Column(Text)
     learning_objectives = Column(JSON, nullable=True)
