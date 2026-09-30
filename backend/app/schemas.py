@@ -32,18 +32,20 @@ class RoomOut(BaseModel):
     room_type: RoomType
     join_code: str
     created_at: datetime
+    member_count: int = 0
 
 
 class JoinRoomIn(BaseModel):
     join_code: str = Field(min_length=6, max_length=12)
 
 
+# Replace the current MemberOut schema with this:
 class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID
-    room_id: uuid.UUID
-    user_id: uuid.UUID
-    joined_at: datetime
+    id: uuid.UUID        # This is the User ID
+    name: str            # This is the User name
+    joined_at: datetime  # When they joined the room
+    
 
 
 class RoomBrief(BaseModel):

@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import select, func  # <--- Added func here
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,16 +14,23 @@ from app.schemas import JoinRoomIn, RoomOut, BookOut, PageOut
 
 router = APIRouter(prefix="/student", tags=["student"], dependencies=[Depends(require_student)])
 
+
 @router.get("/ping")
 def ping(user=Depends(require_student)):
     return {"role": user.role}
 
+
 @router.post("/rooms/join", response_model=RoomOut)
 def join_room(body: JoinRoomIn, student=Depends(require_student), db: Session = Depends(get_db)):
-    room = db.scalar(select(Room).where(Room.join_code == body.join_code))
-    if room is None: raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid join code")
+    # FIX: Make the join code lookup case-insensitive
+    room = db.scalar(select(Room).where(func.lower(Room.join_code) == body.join_code.lower()))
+    if room is None: 
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid join code")
+        
     already = db.scalar(select(RoomMember.id).where(RoomMember.room_id == room.id, RoomMember.user_id == student.id))
-    if already: raise HTTPException(status.HTTP_409_CONFLICT, "You are already in this room")
+    if already: 
+        raise HTTPException(status.HTTP_409_CONFLICT, "You are already in this room")
+        
     try:
         db.add(RoomMember(room_id=room.id, user_id=student.id))
         db.commit()
@@ -32,11 +39,13 @@ def join_room(body: JoinRoomIn, student=Depends(require_student), db: Session = 
         raise HTTPException(status.HTTP_409_CONFLICT, "You are already in this room")
     return room
 
+
 @router.get("/rooms", response_model=list[RoomOut])
 def my_rooms(student=Depends(require_student), db: Session = Depends(get_db)):
     return db.scalars(
         select(Room).join(RoomMember, RoomMember.room_id == Room.id).where(RoomMember.user_id == student.id).order_by(RoomMember.joined_at.desc())
     ).all()
+
 
 @router.post("/books/{book_id}/link", status_code=status.HTTP_200_OK)
 def link_book(book_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
@@ -48,15 +57,18 @@ def link_book(book_id: uuid.UUID, student=Depends(require_student), db: Session 
     db.commit()
     return {"status": "linked", "book_id": book_id}
 
+
 @router.delete("/books/{book_id}/link", status_code=status.HTTP_204_NO_CONTENT)
 def unlink_book(book_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
     db.execute(student_book.delete().where(student_book.c.student_id == student.id, student_book.c.book_id == book_id))
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 @router.get("/books", response_model=list[BookOut])
 def my_books(student=Depends(require_student), db: Session = Depends(get_db)):
     return db.scalars(select(Book).join(student_book, student_book.c.book_id == Book.id).where(student_book.c.student_id == student.id)).all()
+
 
 @router.get("/books/{book_id}", response_model=BookOut)
 def get_book_details(book_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
@@ -64,11 +76,13 @@ def get_book_details(book_id: uuid.UUID, student=Depends(require_student), db: S
     if not book: raise HTTPException(status.HTTP_404_NOT_FOUND, "Book not found")
     return book
 
+
 @router.get("/books/{book_id}/chapters/{chapter_id}/pages", response_model=list[PageOut])
 def get_chapter_pages(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
     chapter = db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.book_id == book_id))
     if not chapter: raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
     return db.scalars(select(Page).where(Page.chapter_id == chapter_id).order_by(Page.page_number)).all()
+
 
 @router.post("/books/{book_id}/chapters/{chapter_id}/doubt-upload", response_model=list[PageOut])
 async def student_doubt_upload(

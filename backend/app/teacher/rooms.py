@@ -40,10 +40,16 @@ def get_owned_room(db: Session, teacher: User, room_id: uuid.UUID) -> Room:
 
 
 def list_members(db: Session, room: Room) -> list[MemberOut]:
+    from app.schemas import MemberOut
+    from app.models.user import User
+    from app.models.room import RoomMember
+    
     rows = db.execute(
         select(User.id, User.name, RoomMember.joined_at)
         .join(RoomMember, RoomMember.user_id == User.id)
         .where(RoomMember.room_id == room.id)
         .order_by(RoomMember.joined_at)
     ).all()
-    return [MemberOut(id=i, name=n, joined_at=j) for i, n, j in rows]
+    
+    # We now map the tuple (id, name, joined_at) directly to the schema
+    return [MemberOut(id=row.id, name=row.name, joined_at=row.joined_at) for row in rows]
