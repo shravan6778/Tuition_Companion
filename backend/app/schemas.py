@@ -1,126 +1,105 @@
-import re
 import uuid
-
 from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-from app.models import ChapterStatus, Role, RoomType
-
-
-PHONE_RE = re.compile(r"^\+?[0-9]{10,15}$")
+from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field
+from app.models.room import RoomType
 
 
-def normalize_phone(value: str) -> str:
-    value = re.sub(r"[\s\-()]", "", value)
-
-    if not PHONE_RE.match(value):
-        raise ValueError("Enter a valid phone number")
-
-    return value
-
-#username added
+# --- Auth & User Schemas ---
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    supertokens_user_id: str
     name: str
     username: str
     phone: str
-    role: Role
-    link_code: str | None = None
+    role: str
+    link_code: Optional[str] = None
+    created_at: datetime
 
 
+# --- Room Schemas ---
 class RoomCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
-    room_type: RoomType
+    room_type: RoomType = RoomType.single_class
 
 
 class RoomOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
+    teacher_id: uuid.UUID
     name: str
     room_type: RoomType
     join_code: str
     created_at: datetime
-    member_count: int = 0
-
-
-class MemberOut(BaseModel):
-    id: uuid.UUID
-    name: str
-    joined_at: datetime
 
 
 class JoinRoomIn(BaseModel):
-    join_code: str = Field(min_length=4, max_length=12)
-
-    @field_validator("join_code")
-    @classmethod
-    def upper(cls, v: str) -> str:
-        return v.strip().upper()
+    join_code: str = Field(min_length=6, max_length=12)
 
 
-class LinkStudentIn(BaseModel):
-    link_code: str = Field(min_length=4, max_length=12)
-
-    @field_validator("link_code")
-    @classmethod
-    def upper(cls, v: str) -> str:
-        return v.strip().upper()
-
-
-class RoomBrief(BaseModel):
-    id: uuid.UUID
-    name: str
-
-
-class ChildOut(BaseModel):
-    id: uuid.UUID
-    name: str
-    rooms: list[RoomBrief]
-    
-    
-class SubjectCreate(BaseModel):
-    name: str = Field(min_length=2, max_length=100)
-    grade: str | None = Field(default=None, max_length=20)
-
-    @field_validator("name")
-    @classmethod
-    def strip_name(cls, v: str) -> str:
-        return v.strip()
-
-
-class SubjectOut(BaseModel):
+class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
+    room_id: uuid.UUID
+    user_id: uuid.UUID
+    joined_at: datetime
+
+
+# --- Book, Chapter, Page, Concept Schemas ---
+class ConceptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
     name: str
-    grade: str | None = None
-    created_at: datetime
-    chapter_count: int = 0
+    description: Optional[str] = None
+    learning_objectives: Optional[list[str]] = None
+    prerequisites: Optional[list[str]] = None
+
+
+class PageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    chapter_id: int
+    page_number: int
+    content_text: str
+    verified: bool
+    fingerprint: Optional[str] = None
+    concepts: list[ConceptOut] = []
+
+
+class ChapterCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    sequence_num: int = 1
 
 
 class ChapterOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    subject_id: uuid.UUID
+    id: int
+    book_id: int
     title: str
-    position: int
-    status: ChapterStatus
-    error_message: str | None = None
-    created_at: datetime
-    
-class AttachSubjectIn(BaseModel):
-    subject_id: uuid.UUID
+    sequence_num: int
 
 
-class StudentChapterOut(BaseModel):
-    """What a student may see of a chapter: no file path, hash, or processing details."""
+class BookCreate(BaseModel):
+    board: str
+    class_name: str
+    subject: str
+    publisher: str
+    edition: Optional[str] = None
+    is_customized: bool = False
+    school: Optional[str] = None
+    variant_of_id: Optional[int] = None
 
+
+class BookOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    position: int
+    id: int
+    board: str
+    class_name: str
+    subject: str
+    publisher: str
+    edition: Optional[str] = None
+    is_customized: bool
+    school: Optional[str] = None
+    variant_of_id: Optional[int] = None
+    chapters: list[ChapterOut] = []
