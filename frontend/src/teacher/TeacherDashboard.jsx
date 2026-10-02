@@ -1,143 +1,174 @@
-import { useEffect, useState } from "react";
-import { api } from "../shared/api";
-import Header from "../shared/Header";
+import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import api from "../shared/api";
+import Header from "../shared/Header";
 
 export default function TeacherDashboard() {
-  const [rooms, setRooms] = useState(null);
+  const [rooms, setRooms] = useState([]);
   const [name, setName] = useState("");
-  const [roomType, setRoomType] = useState("single_class");
-  const [error, setError] = useState("");
-
-  const load = () =>
-    api("/teacher/rooms")
-      .then(setRooms)
-      .catch((e) => setError(e.message));
+  const [type, setType] = useState("single_class");
 
   useEffect(() => {
-    load();
+    loadRooms();
   }, []);
 
-  async function create(e) {
-    e.preventDefault();
-    setError("");
-
+  async function loadRooms() {
     try {
-      await api("/teacher/rooms", {
-        method: "POST",
-        body: { name, room_type: roomType },
-      });
-
-      setName("");
-      load();
+      const res = await api.get("/teacher/rooms");
+      setRooms(res.data || []);
     } catch (err) {
-      setError(err.message);
+      console.error("Failed to load rooms:", err);
+    }
+  }
+
+  async function createRoom(e) {
+    e.preventDefault();
+    try {
+      await api.post("/teacher/rooms", { name, room_type: type });
+      setName("");
+      loadRooms();
+    } catch (err) {
+      alert("Failed to create room.");
     }
   }
 
   return (
-    <div className="container">
-      <Header title="Your rooms" />
-
-      <Link
-        className="btn secondary"
-        to="/teacher/library"
-        style={{ marginBottom: 16 }}
+    <div>
+      <Header role="Teacher" />
+      <div
+        className="container"
+        style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}
       >
-        Content library
-      </Link>
-
-      <form className="card stack" onSubmit={create}>
-        <h3>Create a room</h3>
-
-        <div>
-          <label htmlFor="rname">Room name</label>
-          <input
-            id="rname"
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Class 10 Maths"
-            required
-            minLength={2}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="rtype">Room type</label>
-          <select
-            id="rtype"
-            className="input"
-            value={roomType}
-            onChange={(e) => setRoomType(e.target.value)}
+        <div style={{ display: "flex", gap: "1rem", marginBottom: "2rem" }}>
+          <Link
+            to="/teacher/library"
+            style={{
+              padding: "0.6rem 1.2rem",
+              background: "#0070f3",
+              color: "#fff",
+              textDecoration: "none",
+              borderRadius: "5px",
+            }}
           >
-            <option value="single_class">Single class</option>
-            <option value="mixed_class">Mixed class</option>
-          </select>
+            Content Library
+          </Link>
+          <Link
+            to="/teacher/verification"
+            style={{
+              padding: "0.6rem 1.2rem",
+              background: "#666",
+              color: "#fff",
+              textDecoration: "none",
+              borderRadius: "5px",
+            }}
+          >
+            Verification Queue
+          </Link>
         </div>
 
-        {error && <div className="error">{error}</div>}
-
-        <button className="btn" type="submit">
-          Create room
-        </button>
-      </form>
-
-      {rooms && rooms.length === 0 && (
-        <div className="card">
-          <h3>Create your first room</h3>
-          <p className="small">
-            Share the join code with your students once it's created.
-          </p>
+        <div
+          className="card"
+          style={{
+            padding: "1.5rem",
+            border: "1px solid #ddd",
+            borderRadius: "8px",
+            marginBottom: "2rem",
+          }}
+        >
+          <h2>Create a room</h2>
+          <form
+            onSubmit={createRoom}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+              marginTop: "1rem",
+            }}
+          >
+            <div>
+              <label style={{ display: "block", marginBottom: "0.25rem" }}>
+                Room name
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                style={{ padding: "0.5rem", width: "100%" }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: "0.25rem" }}>
+                Room type
+              </label>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                style={{ padding: "0.5rem", width: "100%" }}
+              >
+                <option value="single_class">Single class</option>
+                <option value="mixed_class">Mixed class</option>
+              </select>
+            </div>
+            <button
+              type="submit"
+              style={{ padding: "0.6rem 1.2rem", alignSelf: "flex-start" }}
+            >
+              Create room
+            </button>
+          </form>
         </div>
-      )}
 
-      {rooms && rooms.length > 0 && (
-        <div className="card" style={{ overflowX: "auto" }}>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Room</th>
-                <th>Type</th>
-                <th>Join code</th>
-                <th>Students</th>
-                <th></th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {rooms.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.name}</td>
-
-                  <td>
-                    {r.room_type === "single_class"
-                      ? "Single class"
-                      : "Mixed class"}
-                  </td>
-
-                  <td>
-                    <span className="code" style={{ fontSize: 16 }}>
-                      {r.join_code}
-                    </span>
-                  </td>
-
-                  <td>{r.member_count}</td>
-
-                  <td>
-                    <Link
-                      className="btn secondary small-btn"
-                      to={`/teacher/rooms/${r.id}`}
-                    >
-                      Manage content
-                    </Link>
-                  </td>
+        <div
+          className="card"
+          style={{
+            padding: "1.5rem",
+            border: "1px solid #ddd",
+            borderRadius: "8px",
+          }}
+        >
+          <h2>Your rooms</h2>
+          {rooms.length === 0 ? (
+            <p>No rooms created yet.</p>
+          ) : (
+            <table
+              style={{
+                width: "100%",
+                textAlign: "left",
+                borderCollapse: "collapse",
+                marginTop: "1rem",
+              }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "2px solid #ddd" }}>
+                  <th style={{ padding: "0.5rem" }}>Room</th>
+                  <th style={{ padding: "0.5rem" }}>Type</th>
+                  <th style={{ padding: "0.5rem" }}>Join code</th>
+                  <th style={{ padding: "0.5rem" }}>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rooms.map((r) => (
+                  <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
+                    <td style={{ padding: "0.5rem" }}>{r.name}</td>
+                    <td style={{ padding: "0.5rem" }}>{r.room_type}</td>
+                    <td style={{ padding: "0.5rem" }}>
+                      <strong>{r.join_code}</strong>
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      <Link
+                        to={`/teacher/rooms/${r.id}`}
+                        style={{ color: "#0070f3" }}
+                      >
+                        View members
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
