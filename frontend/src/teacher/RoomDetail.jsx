@@ -32,7 +32,7 @@ export default function RoomDetail() {
         <h2 style={{ marginTop: "1rem" }}>Room Members</h2>
         <p style={{ color: "#666", marginBottom: "1.5rem" }}>
           Rooms only group students. Content is managed independently through
-          the Content Library[cite: 2].
+          the Content Library.
         </p>
 
         <div

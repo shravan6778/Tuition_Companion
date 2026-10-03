@@ -85,7 +85,7 @@ def get_chapter_pages(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends
 
 
 @router.post("/books/{book_id}/chapters/{chapter_id}/doubt-upload", response_model=list[PageOut])
-async def student_doubt_upload(
+def student_doubt_upload(
     book_id: uuid.UUID,
     chapter_id: uuid.UUID,
     file: UploadFile = File(...),
@@ -96,11 +96,11 @@ async def student_doubt_upload(
     if not chapter: raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
 
     orchestrator = PipelineOrchestrator(db)
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     filename = file.filename or "page.jpg"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
 
-    pages = await orchestrator.process_upload(
+    pages = orchestrator.process_upload(
         file_bytes=file_bytes, ext=ext, metadata={"book_id": book_id, "chapter_id": chapter_id}, user_id=student.id, is_teacher=False
     )
     return pages

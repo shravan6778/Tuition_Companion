@@ -1,11 +1,10 @@
 from .base import Base
-from .content import Chapter, ChapterExtraction, ChapterStatus, RoomSubject, Subject, ChapterConcepts
+from .content import Book, Chapter, Concept, Page, student_book
 from .links import ParentStudentLink
 from .room import Room, RoomMember, RoomType
 from .user import Role, User
 
-...
 __all__ = [
-    "Base", "Chapter", "ChapterExtraction", "ChapterStatus", "ParentStudentLink", "Role", "Room",
-    "RoomMember", "RoomSubject", "RoomType", "Subject", "User", "ChapterConcepts",
+    "Base", "Book", "Chapter", "Concept", "Page", "ParentStudentLink",
+    "Role", "Room", "RoomMember", "RoomType", "User", "student_book",
 ]

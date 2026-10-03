@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
@@ -6,6 +7,7 @@ from supertokens_python.framework.fastapi import get_middleware
 from app.auth.routes import router as auth_router
 from app.auth.supertokens_config import init_supertokens
 from app.core.config import settings
+from app.core.errors import ProcessingError
 from app.core.logging import setup_logging
 from app.parent.routes import router as parent_router
 from app.student.routes import router as student_router
@@ -26,6 +28,12 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type"] + get_all_cors_headers(),
 )
+
+
+@app.exception_handler(ProcessingError)
+def processing_error_handler(request: Request, exc: ProcessingError):
+    # ProcessingError messages are written to be safe to show to the teacher.
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
 @app.get("/health")

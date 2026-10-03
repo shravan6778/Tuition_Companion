@@ -47,7 +47,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_books_publisher'), 'books', ['publisher'], unique=False)
     op.create_index(op.f('ix_books_subject'), 'books', ['subject'], unique=False)
 
-    # 3. Create student_book association table[cite: 2]
+    # 3. Create student_book association table
     op.create_table(
         'student_book',
         sa.Column('student_id', sa.Uuid(), nullable=False),
@@ -57,7 +57,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('student_id', 'book_id')
     )
 
-    # 4. Create chapters table[cite: 2]
+    # 4. Create chapters table
     op.create_table(
         'chapters',
         sa.Column('id', sa.Uuid(), nullable=False),
@@ -70,7 +70,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_chapters_id'), 'chapters', ['id'], unique=False)
     op.create_index(op.f('ix_chapters_title'), 'chapters', ['title'], unique=False)
 
-    # 5. Create pages table[cite: 2]
+    # 5. Create pages table
     op.create_table(
         'pages',
         sa.Column('id', sa.Uuid(), nullable=False),
@@ -88,7 +88,7 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_pages_id'), 'pages', ['id'], unique=False)
 
-    # 6. Create concepts table[cite: 2]
+    # 6. Create concepts table
     op.create_table(
         'concepts',
         sa.Column('id', sa.Uuid(), nullable=False),

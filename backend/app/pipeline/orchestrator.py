@@ -1,139 +1,78 @@
 import logging
 from typing import Optional
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.llm.openai_compat_provider import LLMProvider
-from app.models.content import Book, Chapter, Concept, Page
-from app.ocr.azure_provider import AzureDocIntelProvider
+from app.llm import get_llm_provider
+from app.models.content import Concept, Page
+from app.ocr import get_ocr_provider
+from app.pipeline.concepts import extract_page_concepts
 from app.pipeline.fingerprint import compute_jaccard_similarity, compute_minhash
 
 logger = logging.getLogger(__name__)
 
 
 class PipelineOrchestrator:
-    def __init__(
-        self,
-        db: Session,
-        ocr_provider: Optional[AzureDocIntelProvider] = None,
-        llm_provider: Optional[LLMProvider] = None,
-    ):
+    """Synchronous on purpose: OCR and LLM clients are blocking, and FastAPI runs plain `def`
+    routes in a threadpool, so this doesn't stall the event loop. Providers come from the
+    factories, so tests and keyless dev use the fake ones (OCR_PROVIDER / LLM_PROVIDER=fake)."""
+
+    def __init__(self, db: Session, ocr_provider=None, llm_provider=None):
         self.db = db
-        self.ocr = ocr_provider or AzureDocIntelProvider(
-            endpoint=settings.AZURE_DOC_INTEL_ENDPOINT,
-            key=settings.AZURE_DOC_INTEL_KEY,
-        )
-        self.llm = llm_provider or LLMProvider()
+        self.ocr = ocr_provider or get_ocr_provider()
+        self.llm = llm_provider or get_llm_provider()
 
-    async def detect_publisher_from_cover(self, file_bytes: bytes, ext: str) -> Optional[str]:
-        """Layer 1: Metadata + Cover-page OCR to extract publisher."""
-        try:
-            ocr_res = self.ocr.extract(file_bytes, ext)
-            text_lower = ocr_res.text.lower()
-            known_publishers = ["ncert", "scert", "cambridge", "oxford", "pearson", "s. chand", "ratna sagar"]
-            for pub in known_publishers:
-                if pub in text_lower:
-                    return pub.upper()
-        except Exception as e:
-            logger.warning(f"Could not extract publisher from cover: {e}")
-        return None
-
-    async def process_upload(
-        self,
-        file_bytes: bytes,
-        ext: str,
-        metadata: dict,
-        user_id,
-        is_teacher: bool,
-    ) -> list[Page]:
-        """
-        Executes lazy page-by-page ingestion[cite: 2]:
-        1. Extract text and layout via Azure Document Intelligence[cite: 2].
-        2. Normalize and compute MinHash fingerprint[cite: 2].
-        3. Match against existing corpus:
-           - ~95%+ -> reuse existing concept graph, zero LLM cost[cite: 2].
-           - 60-90% -> variant candidate[cite: 2].
-           - New -> process with LLM and store[cite: 2].
-        """
-        layout_result = self.ocr.extract_layout(file_bytes, ext)
+    def process_upload(self, file_bytes: bytes, ext: str, metadata: dict, user_id, is_teacher: bool) -> list[Page]:
+        """OCR -> per-page MinHash -> match against existing pages:
+        ~95%+ reuse that page's concepts (no LLM call); otherwise extract concepts via LLM.
+        All pages are written in ONE transaction: any failure rolls the whole upload back."""
+        layout = self.ocr.extract_layout(file_bytes, ext)
         chapter_id = metadata["chapter_id"]
-        book_id = metadata.get("book_id")
 
-        existing_pages = self.db.scalars(select(Page)).all()
-        processed_pages = []
+        existing = [p for p in self.db.scalars(select(Page)).all() if p.fingerprint]
+        created: list[Page] = []
+        try:
+            for p_data in layout["pages"]:
+                text, number = p_data["text"], p_data["page_number"]
+                fp = compute_minhash(text)
 
-        for p_data in layout_result["pages"]:
-            page_text = p_data["text"]
-            page_num = p_data["page_number"]
-            page_fp = compute_minhash(page_text)
-
-            best_match: Optional[Page] = None
-            best_score = 0.0
-
-            for ep in existing_pages:
-                if ep.fingerprint:
-                    score = compute_jaccard_similarity(page_fp, ep.fingerprint)
+                best: Optional[Page] = None
+                best_score = 0.0
+                for ep in existing:
+                    score = compute_jaccard_similarity(fp, ep.fingerprint)
                     if score > best_score:
-                        best_score = score
-                        best_match = ep
+                        best, best_score = ep, score
 
-            # Layer 2: ~95%+ exact/near-identical match -> reuse concepts[cite: 2]
-            if best_score >= 0.95 and best_match:
-                logger.info(f"Page matched existing page #{best_match.id} with score {best_score:.2f}[cite: 2]. Linking concepts[cite: 2].")
-                new_page = Page(
+                page = Page(
                     chapter_id=chapter_id,
-                    page_number=page_num,
-                    content_text=page_text,
-                    layout_data=layout_result.get("paragraphs"),
-                    verified=True,  # Matches an already verified corpus page[cite: 2]
+                    page_number=number,
+                    content_text=text,
+                    layout_data=p_data.get("lines"),
+                    verified=True if (best and best_score >= 0.95) else is_teacher,
                     uploaded_by_id=user_id,
-                    fingerprint=page_fp,
+                    fingerprint=fp,
                 )
-                self.db.add(new_page)
+                self.db.add(page)
                 self.db.flush()
 
-                # Reuse existing concepts without calling LLM[cite: 2]
-                for c in best_match.concepts:
-                    self.db.add(
-                        Concept(
-                            page_id=new_page.id,
-                            name=c.name,
-                            description=c.description,
-                            learning_objectives=c.learning_objectives,
-                            prerequisites=c.prerequisites,
-                        )
-                    )
-                self.db.commit()
-                processed_pages.append(new_page)
-                continue
-
-            # Layer 3 / New Page: Extract concepts via LLM[cite: 2]
-            new_page = Page(
-                chapter_id=chapter_id,
-                page_number=page_num,
-                content_text=page_text,
-                layout_data=layout_result.get("paragraphs"),
-                verified=is_teacher,  # Teacher = verified, Student = unverified[cite: 2]
-                uploaded_by_id=user_id,
-                fingerprint=page_fp,
-            )
-            self.db.add(new_page)
-            self.db.flush()
-
-            extracted_concepts = await self.llm.extract_concepts(page_text)
-            for c in extracted_concepts:
-                self.db.add(
-                    Concept(
-                        page_id=new_page.id,
-                        name=c.get("name", "Unnamed Concept"),
-                        description=c.get("description", ""),
-                        learning_objectives=c.get("learning_objectives", []),
-                        prerequisites=c.get("prerequisites", []),
-                    )
-                )
-
+                if best and best_score >= 0.95:
+                    logger.info("Page %s matched %s (%.2f); reusing concepts", number, best.id, best_score)
+                    for c in best.concepts:
+                        self.db.add(Concept(
+                            page_id=page.id, name=c.name, description=c.description,
+                            learning_objectives=c.learning_objectives, prerequisites=c.prerequisites,
+                        ))
+                else:
+                    for c in extract_page_concepts(self.llm, text):
+                        self.db.add(Concept(
+                            page_id=page.id, name=c.name, description=c.description,
+                            learning_objectives=c.learning_objectives, prerequisites=c.prerequisites,
+                        ))
+                created.append(page)
+                existing.append(page)
             self.db.commit()
-            processed_pages.append(new_page)
-
-        return processed_pages
+        except Exception:
+            self.db.rollback()
+            raise
+        return created

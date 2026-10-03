@@ -3,7 +3,7 @@ from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON, Text,
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
-# Association table for Student to Book linkage [source: 2]
+# Association table for Student to Book linkage
 student_book = Table(
     'student_book',
     Base.metadata,
@@ -15,14 +15,14 @@ class Book(Base):
     __tablename__ = "books"
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
-    board = Column(String, index=True)  # e.g., CBSE, State Board [source: 2]
-    class_name = Column(String, index=True)  # e.g., Class 9 [source: 2]
-    subject = Column(String, index=True)  # e.g., Science [source: 2]
-    publisher = Column(String, index=True)  # e.g., NCERT [source: 2]
+    board = Column(String, index=True)  # e.g., CBSE, State Board
+    class_name = Column(String, index=True)  # e.g., Class 9
+    subject = Column(String, index=True)  # e.g., Science
+    publisher = Column(String, index=True)  # e.g., NCERT
     edition = Column(String, nullable=True)
-    is_customized = Column(Boolean, default=False)  # [source: 2]
-    school = Column(String, nullable=True)  # [source: 2]
-    variant_of_id = Column(Uuid, ForeignKey("books.id"), nullable=True)  # [source: 2]
+    is_customized = Column(Boolean, default=False)  #
+    school = Column(String, nullable=True)  #
+    variant_of_id = Column(Uuid, ForeignKey("books.id"), nullable=True)  #
 
     chapters = relationship("Chapter", back_populates="book", cascade="all, delete-orphan")
     variants = relationship("Book", backref="base_book", remote_side=[id])
@@ -46,11 +46,11 @@ class Page(Base):
     chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
     page_number = Column(Integer)
     content_text = Column(Text, nullable=False)
-    layout_data = Column(JSON, nullable=True)  # Azure Document Intelligence layout data [source: 2]
+    layout_data = Column(JSON, nullable=True)  # Azure Document Intelligence layout data
     image_url = Column(String, nullable=True)
-    verified = Column(Boolean, default=False)  # Teacher = verified, Student = unverified [source: 2]
+    verified = Column(Boolean, default=False)  # Teacher = verified, Student = unverified
     uploaded_by_id = Column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    fingerprint = Column(String, nullable=True)  # MinHash signature [source: 2]
+    fingerprint = Column(String, nullable=True)  # MinHash signature
 
     chapter = relationship("Chapter", back_populates="pages")
     concepts = relationship("Concept", back_populates="page", cascade="all, delete-orphan")

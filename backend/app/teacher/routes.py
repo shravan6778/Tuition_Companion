@@ -76,7 +76,7 @@ def list_chapters(book_id: uuid.UUID, db: Session = Depends(get_db)):
     return db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.sequence_num)).all()
 
 @router.post("/books/{book_id}/chapters/{chapter_id}/pages/upload", response_model=list[PageOut])
-async def teacher_upload_pages(
+def teacher_upload_pages(
     book_id: uuid.UUID,
     chapter_id: uuid.UUID,
     file: UploadFile = File(...),
@@ -87,11 +87,11 @@ async def teacher_upload_pages(
     if not chapter: raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found in this book")
 
     orchestrator = PipelineOrchestrator(db)
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     filename = file.filename or "file.pdf"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "pdf"
 
-    pages = await orchestrator.process_upload(
+    pages = orchestrator.process_upload(
         file_bytes=file_bytes, ext=ext, metadata={"book_id": book_id, "chapter_id": chapter_id}, user_id=teacher.id, is_teacher=True
     )
     return pages

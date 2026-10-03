@@ -22,5 +22,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"  # on Azure this is your DEPLOYMENT name
     llm_timeout_s: int = 60
-    concept_max_chars: int = 60000
+    concept_max_chars: int = 12000  # per-page LLM input cap
+
+
 settings = Settings()

@@ -1,6 +1,6 @@
 """
 Pre-seed free official textbooks (NCERT Class 9 & 10 Science/Math)
-into the reference corpus[cite: 2].
+into the reference corpus.
 Run: python -m app.db.seed_ncert
 """
 from app.db.session import SessionLocal
@@ -50,7 +50,7 @@ def seed_ncert_corpus():
             chapter_id=ch1.id,
             page_number=1,
             content_text=sample_p1_text,
-            verified=True,  # Reference corpus is pre-verified[cite: 2]
+            verified=True,  # Reference corpus is pre-verified
             fingerprint=compute_minhash(sample_p1_text),
         )
         db.add(page1)

@@ -59,3 +59,13 @@ def tmp_storage(tmp_path, monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "storage_dir", str(tmp_path / "storage"))
+
+
+@pytest.fixture(autouse=True)
+def fake_providers(monkeypatch):
+    """Tests must never reach real Azure/LLM, even if a developer's .env sets
+    OCR_PROVIDER=azure / LLM_PROVIDER=openai_compat (settings reads .env)."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ocr_provider", "fake")
+    monkeypatch.setattr(settings, "llm_provider", "fake")
