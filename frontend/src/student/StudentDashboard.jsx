@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import api from "../shared/api";
 import Header from "../shared/Header";
-import { fetchMyLinkedBooks, linkBook } from "../api/content";
+import {
+  fetchMyLinkedBooks,
+  fetchStudentLibrary,
+  linkBook,
+} from "../api/content";
 
 export default function StudentDashboard() {
   const { user } = useAuth();
@@ -30,8 +33,7 @@ export default function StudentDashboard() {
     try {
       const myBooks = await fetchMyLinkedBooks();
       setLinkedBooks(myBooks || []);
-      const res = await api.get("/teacher/books");
-      setAvailableBooks(res.data || []);
+      setAvailableBooks((await fetchStudentLibrary()) || []);
     } catch (err) {
       console.error("Failed to load books:", err);
     }
@@ -52,7 +54,7 @@ export default function StudentDashboard() {
     if (!e.target.value) return;
     try {
       await linkBook(e.target.value);
-      loadBooks();
+      await loadBooks();
     } catch (err) {
       alert("Failed to link book.");
     }
@@ -75,7 +77,7 @@ export default function StudentDashboard() {
             marginBottom: "2rem",
           }}
         >
-          <h2>My Textbooks & Doubts</h2>
+          <h2>My textbooks</h2>
           {linkedBooks.length === 0 ? (
             <p>
               You haven't linked any textbooks yet. Select a textbook below to
@@ -97,7 +99,7 @@ export default function StudentDashboard() {
           <div style={{ marginTop: "1rem" }}>
             <select
               onChange={handleLinkBook}
-              defaultValue=""
+              value=""
               style={{ padding: "0.5rem" }}
             >
               <option value="" disabled>
@@ -106,28 +108,11 @@ export default function StudentDashboard() {
               {availableBooks.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.board} - {b.class_name} {b.subject} ({b.publisher})
+                  {b.is_reference ? " - official" : ""}
                 </option>
               ))}
             </select>
           </div>
-
-          {linkedBooks.length > 0 && (
-            <div style={{ marginTop: "1.5rem" }}>
-              <Link
-                to="/student/doubt"
-                style={{
-                  display: "inline-block",
-                  padding: "0.6rem 1.2rem",
-                  background: "#0070f3",
-                  color: "#fff",
-                  textDecoration: "none",
-                  borderRadius: "5px",
-                }}
-              >
-                Ask a Doubt (Scan Page)
-              </Link>
-            </div>
-          )}
         </div>
 
         {/* Room Section */}

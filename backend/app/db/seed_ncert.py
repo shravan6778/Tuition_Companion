@@ -12,7 +12,7 @@ def seed_ncert_corpus():
     db = SessionLocal()
     try:
         # Check if already seeded
-        existing = db.query(Book).filter(Book.publisher == "NCERT").first()
+        existing = db.query(Book).filter(Book.is_reference.is_(True), Book.publisher == "NCERT").first()
         if existing:
             print("NCERT reference corpus is already seeded.")
             return
@@ -27,6 +27,7 @@ def seed_ncert_corpus():
             publisher="NCERT",
             edition="2026",
             is_customized=False,
+            is_reference=True,
         )
         db.add(book_c9_sci)
         db.flush()

@@ -20,7 +20,7 @@ export default function SignupPage() {
     setError("");
     try {
       const me = await signup(form);
-      nav(`/${me.role}`);
+      nav(`/${String(me.role).toLowerCase()}`, { replace: true });
     } catch (err) {
       setError(err.message);
     }

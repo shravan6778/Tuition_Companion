@@ -6,7 +6,7 @@ from app.models.content import Book, Chapter, Page, Concept
 def test_page_concept_hierarchy_and_prerequisites(session_factory):
     """Validate Phase 2 hierarchy: Book -> Chapter -> Page -> Concept"""
     with session_factory() as db:
-        book = Book(board="CBSE", class_name="Class 10", subject="Science", publisher="NCERT")
+        book = Book(board="CBSE", class_name="Class 10", subject="Science", publisher="NCERT", is_reference=True)
         db.add(book)
         db.flush()
 
@@ -33,7 +33,7 @@ def test_page_concept_hierarchy_and_prerequisites(session_factory):
 def test_concepts_cascade_delete_with_page(session_factory):
     """Deleting a page should cascade and delete its associated concepts."""
     with session_factory() as db:
-        book = Book(board="ICSE", class_name="Class 9", subject="Math", publisher="Selina")
+        book = Book(board="ICSE", class_name="Class 9", subject="Math", publisher="Selina", is_reference=True)
         db.add(book)
         db.flush()
 

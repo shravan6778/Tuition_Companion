@@ -83,7 +83,6 @@ class PageOut(BaseModel):
     page_number: int
     content_text: str
     verified: bool
-    fingerprint: Optional[str] = None
     concepts: list[ConceptOut] = []
 
 
@@ -98,6 +97,8 @@ class ChapterOut(BaseModel):
     book_id: uuid.UUID
     title: str
     sequence_num: int
+    status: str = "empty"
+    error_message: Optional[str] = None
 
 
 class BookCreate(BaseModel):
@@ -122,4 +123,5 @@ class BookOut(BaseModel):
     is_customized: bool
     school: Optional[str] = None
     variant_of_id: Optional[uuid.UUID] = None
+    is_reference: bool = False
     chapters: list[ChapterOut] = []

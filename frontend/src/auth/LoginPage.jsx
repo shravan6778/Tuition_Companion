@@ -14,7 +14,7 @@ export default function LoginPage() {
     setError("");
     try {
       const me = await login(username, password);
-      nav(`/${me.role}`);
+      nav(`/${String(me.role).toLowerCase()}`, { replace: true });
     } catch (err) {
       setError(err.message);
     }

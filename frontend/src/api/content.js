@@ -46,12 +46,9 @@ export async function uploadChapterPages(bookId, chapterId, file) {
   });
 }
 
-export async function fetchUnverifiedPages() {
-  return request("/teacher/pages/unverified");
-}
-
-export async function verifyPage(pageId) {
-  return request(`/teacher/pages/${pageId}/verify`, {
+// Re-run processing on the already-uploaded file after a failure.
+export async function retryChapter(bookId, chapterId) {
+  return request(`/teacher/books/${bookId}/chapters/${chapterId}/retry`, {
     method: "POST",
   });
 }
@@ -60,6 +57,11 @@ export async function verifyPage(pageId) {
 
 export async function fetchMyLinkedBooks() {
   return request("/student/books");
+}
+
+// Books this student may link: reference books + books of teachers whose room they joined.
+export async function fetchStudentLibrary() {
+  return request("/student/library");
 }
 
 export async function linkBook(bookId) {
@@ -76,14 +78,4 @@ export async function unlinkBook(bookId) {
 
 export async function fetchChapterPages(bookId, chapterId) {
   return request(`/student/books/${bookId}/chapters/${chapterId}/pages`);
-}
-
-export async function uploadStudentDoubtPage(bookId, chapterId, file) {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  return request(`/student/books/${bookId}/chapters/${chapterId}/doubt-upload`, {
-    method: "POST",
-    body: formData,
-  });
 }

@@ -8,10 +8,8 @@ import StudentDashboard from "./student/StudentDashboard.jsx";
 import TeacherDashboard from "./teacher/TeacherDashboard.jsx";
 import RoomDetail from "./teacher/RoomDetail.jsx";
 
-// Phase 2 Content Pipeline Components
+// Phase 2 content library
 import TeacherLibrary from "./components/TeacherLibrary.jsx";
-import StudentDoubtUpload from "./components/StudentDoubtUpload.jsx";
-import TeacherVerificationQueue from "./components/TeacherVerificationQueue.jsx";
 
 const guard = (role, el) => (
   <ProtectedRoute roles={[role]}>{el}</ProtectedRoute>
@@ -34,17 +32,9 @@ export default function App() {
         path="/teacher/library"
         element={guard("teacher", <TeacherLibrary />)}
       />
-      <Route
-        path="/teacher/verification"
-        element={guard("teacher", <TeacherVerificationQueue />)}
-      />
 
       {/* Student Routes */}
       <Route path="/student" element={guard("student", <StudentDashboard />)} />
-      <Route
-        path="/student/doubt"
-        element={guard("student", <StudentDoubtUpload />)}
-      />
 
       {/* Parent Routes */}
       <Route path="/parent" element={guard("parent", <ParentDashboard />)} />

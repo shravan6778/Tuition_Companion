@@ -52,18 +52,6 @@ export default function TeacherDashboard() {
           >
             Content Library
           </Link>
-          <Link
-            to="/teacher/verification"
-            style={{
-              padding: "0.6rem 1.2rem",
-              background: "#666",
-              color: "#fff",
-              textDecoration: "none",
-              borderRadius: "5px",
-            }}
-          >
-            Verification Queue
-          </Link>
         </div>
 
         <div

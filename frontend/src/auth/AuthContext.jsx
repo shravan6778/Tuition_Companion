@@ -19,7 +19,7 @@ export function AuthProvider({ children }) {
     (async () => {
       if (await doesSessionExist()) {
         try {
-          setProfile(await api("/auth/me"));
+          setProfile((await api("/auth/me")).data);
         } catch {
           setProfile(null);
         }
@@ -38,7 +38,7 @@ export function AuthProvider({ children }) {
     if (response.status !== "OK") {
       throw new Error("Invalid username or password"); // generic on purpose
     }
-    const me = await api("/auth/me");
+    const me = (await api("/auth/me")).data;
     setProfile(me);
     return me;
   }
@@ -64,7 +64,7 @@ export function AuthProvider({ children }) {
             : "Could not create account with these details";
       throw new Error(msg);
     }
-    const me = await api("/auth/me");
+    const me = (await api("/auth/me")).data;
     setProfile(me);
     return me;
   }
@@ -75,7 +75,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthCtx.Provider value={{ profile, loading, login, signup, logout }}>
+    <AuthCtx.Provider value={{ user: profile, profile, loading, login, signup, logout }}>
       {children}
     </AuthCtx.Provider>
   );

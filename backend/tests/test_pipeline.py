@@ -18,8 +18,10 @@ def _teacher(session_factory):
     return u, {"Authorization": "Bearer st-t1"}
 
 
-def _book_and_chapter(db):
-    book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Test")
+def _book_and_chapter(db, owner=None):
+    """Owned by `owner` (a teacher) if given, otherwise a reference book."""
+    book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Test",
+                is_reference=owner is None, owner_teacher_id=owner.id if owner else None)
     db.add(book)
     db.flush()
     ch = Chapter(book_id=book.id, title="Matter", sequence_num=1)
@@ -63,31 +65,58 @@ def test_app_boots(client):
 
 
 def test_teacher_upload_end_to_end_with_fake_providers(client, session_factory):
-    _, th = _teacher(session_factory)
+    teacher, th = _teacher(session_factory)
     with session_factory() as db:
-        book_id, ch_id = _book_and_chapter(db)
+        book_id, ch_id = _book_and_chapter(db, owner=teacher)
     res = client.post(
         f"/teacher/books/{book_id}/chapters/{ch_id}/pages/upload",
         files={"file": ("p.pdf", _text_pdf("Matter is anything with mass", "Particles of matter attract"), "application/pdf")},
         headers=th,
     )
-    assert res.status_code == 200, res.text
-    pages = res.json()
+    assert res.status_code == 202, res.text
+    assert res.json()["status"] == "processing"  # the response returns before processing finishes
+
+    # TestClient runs the background job before returning control, so by now it is done.
+    pages = client.get(f"/teacher/books/{book_id}/chapters/{ch_id}/pages", headers=th).json()
     assert [p["page_number"] for p in pages] == [1, 2]
     assert all(p["concepts"] for p in pages)
 
 
-def test_identical_page_reuses_concepts_without_llm_call(session_factory):
+def _chapter(db, book_id, n):
+    ch = Chapter(book_id=book_id, title=f"Ch {n}", sequence_num=n)
+    db.add(ch)
+    db.commit()
+    return ch
+
+
+def test_identical_page_in_another_chapter_reuses_concepts_without_llm_call(session_factory):
     pdf = _text_pdf("Matter is anything that occupies space and has mass in our surroundings")
     with session_factory() as db:
-        _, ch_id = _book_and_chapter(db)
+        book_id, ch1_id = _book_and_chapter(db)
+        ch2 = _chapter(db, book_id, 2)
         llm = CountingLLM()
         orch = PipelineOrchestrator(db, llm_provider=llm)
-        orch.process_upload(pdf, "pdf", {"chapter_id": ch_id}, None, True)
+        orch.process_chapter_file(db.get(Chapter, ch1_id), pdf, "pdf", None)
+        db.commit()
         assert llm.calls == 1
-        pages = orch.process_upload(pdf, "pdf", {"chapter_id": ch_id}, None, True)
-        assert llm.calls == 1  # second upload matched the first: zero LLM cost
+        pages = orch.process_chapter_file(ch2, pdf, "pdf", None)
+        db.commit()
+        assert llm.calls == 1  # second chapter matched the first: zero LLM cost
         assert pages[0].concepts[0].name == "Matter"
+
+
+def test_reprocessing_a_chapter_replaces_pages_instead_of_duplicating(session_factory):
+    with session_factory() as db:
+        _, ch_id = _book_and_chapter(db)
+        orch = PipelineOrchestrator(db, llm_provider=CountingLLM())
+        ch = db.get(Chapter, ch_id)
+        orch.process_chapter_file(ch, _text_pdf("first version of page one", "and page two"), "pdf", None)
+        db.commit()
+        orch.process_chapter_file(ch, _text_pdf("a completely different single page"), "pdf", None)
+        db.commit()
+        pages = db.scalars(select(Page).where(Page.chapter_id == ch_id)).all()
+        assert [p.page_number for p in pages] == [1]
+        assert "different" in pages[0].content_text
 
 
 def test_invalid_llm_json_fails_loudly_and_rolls_back(session_factory):
@@ -95,7 +124,8 @@ def test_invalid_llm_json_fails_loudly_and_rolls_back(session_factory):
     with session_factory() as db:
         _, ch_id = _book_and_chapter(db)
         llm = CountingLLM(reply="not json at all")
-        with pytest.raises(ProcessingError):
-            PipelineOrchestrator(db, llm_provider=llm).process_upload(pdf, "pdf", {"chapter_id": ch_id}, None, True)
+        with pytest.raises(ProcessingError, match="page 1"):
+            PipelineOrchestrator(db, llm_provider=llm).process_chapter_file(db.get(Chapter, ch_id), pdf, "pdf", None)
         assert llm.calls == 3  # first try + 2 correction retries
+        db.rollback()  # what the job does on failure
         assert db.scalars(select(Page)).all() == []  # no half-processed chapter

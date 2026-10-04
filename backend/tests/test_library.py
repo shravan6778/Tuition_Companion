@@ -8,7 +8,7 @@ from app.models.user import User, Role
 def test_book_crud_and_student_link(session_factory):
     with session_factory() as db:
         # 1. Create a Book
-        book = Book(board="CBSE", class_name="Class 10", subject="Mathematics", publisher="NCERT")
+        book = Book(board="CBSE", class_name="Class 10", subject="Mathematics", publisher="NCERT", is_reference=True)
         db.add(book)
         db.flush()
 
@@ -41,7 +41,7 @@ def test_book_crud_and_student_link(session_factory):
 def test_page_verification_flag(session_factory):
     """Teacher uploads are verified; student uploads are unverified until confirmed."""
     with session_factory() as db:
-        book = Book(board="CBSE", class_name="Class 9", subject="Physics", publisher="NCERT")
+        book = Book(board="CBSE", class_name="Class 9", subject="Physics", publisher="NCERT", is_reference=True)
         db.add(book)
         db.flush()
 
