@@ -5,6 +5,7 @@ import {
   createChapter,
   uploadChapterPages,
   retryChapter,
+  fetchChapterGraph,
 } from "../api/content";
 
 const EMPTY_BOOK = {
@@ -17,6 +18,50 @@ const EMPTY_BOOK = {
   is_customized: false,
 };
 
+function ConceptMap({ graph }) {
+  const nameById = Object.fromEntries(graph.nodes.map((n) => [n.id, n.name]));
+  const report = graph.report || {};
+  const dropped = report.dropped_cycle_edges?.length || 0;
+  const unresolved = report.unresolved_prerequisites?.length || 0;
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <h4>Concept map ({graph.nodes.length} concepts)</h4>
+      {graph.nodes.length === 0 ? (
+        <p style={{ color: "#666" }}>No concepts were found in this chapter.</p>
+      ) : (
+        <ul>
+          {graph.nodes.map((n) => {
+            const needs = graph.edges
+              .filter((e) => e.concept_id === n.id)
+              .map((e) => nameById[e.prerequisite_id]);
+            return (
+              <li key={n.id}>
+                {n.name}{" "}
+                <small style={{ color: "#666" }}>
+                  (p. {n.pages.join(", ")})
+                </small>
+                {needs.length > 0 && (
+                  <div style={{ fontSize: "0.85rem", color: "#444" }}>
+                    needs: {needs.join(", ")}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {(dropped > 0 || unresolved > 0) && (
+        <p style={{ fontSize: "0.85rem", color: "#a60" }}>
+          {dropped > 0 &&
+            `${dropped} link(s) were skipped because they formed a loop. `}
+          {unresolved > 0 &&
+            `${unresolved} prerequisite(s) mentioned in the text don't match any concept in this chapter.`}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function TeacherLibrary() {
   const [books, setBooks] = useState([]);
   const [selectedBookId, setSelectedBookId] = useState(null);
@@ -25,6 +70,7 @@ export default function TeacherLibrary() {
   const [statusMessage, setStatusMessage] = useState("");
   const [newBook, setNewBook] = useState(EMPTY_BOOK);
   const [newChapterTitle, setNewChapterTitle] = useState("");
+  const [graph, setGraph] = useState(null);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
   const selectedChapter =
@@ -38,6 +84,25 @@ export default function TeacherLibrary() {
   useEffect(() => {
     loadBooks();
   }, []);
+
+  // Load the concept map whenever a finished chapter is selected.
+  useEffect(() => {
+    setGraph(null);
+    if (
+      !selectedBook ||
+      !selectedChapter ||
+      selectedChapter.status !== "ready"
+    ) {
+      return undefined;
+    }
+    let cancelled = false;
+    fetchChapterGraph(selectedBook.id, selectedChapter.id)
+      .then((g) => !cancelled && setGraph(g))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBook?.id, selectedChapter?.id, selectedChapter?.status]);
 
   // While a chapter is processing in the background, refresh every few seconds.
   useEffect(() => {
@@ -262,6 +327,8 @@ export default function TeacherLibrary() {
                 </li>
               ))}
             </ul>
+
+            {graph && <ConceptMap graph={graph} />}
 
             {!selectedBook.is_reference && (
               <>

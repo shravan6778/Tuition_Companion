@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_student
 from app.content_library import access
+from app.content_library.graph_view import chapter_graph
 from app.db.session import get_db
 from app.models.content import Book, Chapter, ChapterStatus, Page, student_book
 from app.models.room import Room, RoomMember
-from app.schemas import BookOut, JoinRoomIn, PageOut, RoomOut
+from app.schemas import BookOut, ChapterGraphOut, JoinRoomIn, PageOut, RoomOut
 
 def _student_view(book: Book) -> BookOut:
     """Students only see chapters that finished processing."""
@@ -112,3 +113,14 @@ def get_chapter_pages(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends
     if not chapter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
     return db.scalars(select(Page).where(Page.chapter_id == chapter.id).order_by(Page.page_number)).all()
+
+
+@router.get("/books/{book_id}/chapters/{chapter_id}/graph", response_model=ChapterGraphOut)
+def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
+    book = access.get_linked_book(db, student, book_id)
+    chapter = db.scalar(
+        select(Chapter).where(Chapter.id == chapter_id, Chapter.book_id == book.id, Chapter.status == ChapterStatus.READY)
+    )
+    if not chapter:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
+    return chapter_graph(db, chapter)

@@ -46,6 +46,11 @@ export async function uploadChapterPages(bookId, chapterId, file) {
   });
 }
 
+// The chapter's prerequisite graph: { nodes, edges, report }.
+export async function fetchChapterGraph(bookId, chapterId) {
+  return request(`/teacher/books/${bookId}/chapters/${chapterId}/graph`);
+}
+
 // Re-run processing on the already-uploaded file after a failure.
 export async function retryChapter(bookId, chapterId) {
   return request(`/teacher/books/${bookId}/chapters/${chapterId}/retry`, {

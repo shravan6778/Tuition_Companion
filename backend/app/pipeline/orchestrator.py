@@ -1,15 +1,16 @@
 import logging
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ProcessingError
 from app.llm import get_llm_provider
-from app.models.content import Chapter, Concept, Page
+from app.models.content import Chapter, Concept, ConceptEdge, Page
 from app.ocr import get_ocr_provider
 from app.pipeline.concepts import ConceptExtractionError, extract_page_concepts
 from app.pipeline.fingerprint import compute_jaccard_similarity, compute_minhash
+from app.pipeline.graph import build_chapter_graph
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class PipelineOrchestrator:
             ).all()
         ]
 
+        self.db.execute(delete(ConceptEdge).where(ConceptEdge.chapter_id == chapter.id))
         for old in list(chapter.pages):
             self.db.delete(old)
         self.db.flush()
@@ -70,7 +72,8 @@ class PipelineOrchestrator:
             if matched:
                 logger.info("Page %s matched %s (%.2f); reusing concepts", number, best.id, best_score)
                 concepts = [
-                    (c.name, c.description, c.learning_objectives, c.prerequisites) for c in best.concepts
+                    (c.name, c.description, c.learning_objectives, c.prerequisites)
+                    for c in sorted(best.concepts, key=lambda c: c.position)
                 ]
             else:
                 try:
@@ -79,11 +82,15 @@ class PipelineOrchestrator:
                     raise ProcessingError(f"{exc} (page {number})") from exc
                 concepts = [(c.name, c.description, c.learning_objectives, c.prerequisites) for c in extracted]
 
-            for name, description, objectives, prerequisites in concepts:
+            for position, (name, description, objectives, prerequisites) in enumerate(concepts):
                 self.db.add(Concept(
-                    page_id=page.id, name=name, description=description,
+                    page_id=page.id, name=name, description=description, position=position,
                     learning_objectives=objectives, prerequisites=prerequisites,
                 ))
             created.append(page)
             known.append(page)
+
+        # A chapter only becomes 'ready' (the caller's commit) once its concepts are linked into a graph.
+        self.db.flush()
+        build_chapter_graph(self.db, chapter, self.llm)
         return created

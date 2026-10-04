@@ -73,7 +73,30 @@ class ConceptOut(BaseModel):
     name: str
     description: Optional[str] = None
     learning_objectives: Optional[list[str]] = None
-    prerequisites: Optional[list[str]] = None
+    prerequisites: Optional[list[str]] = None  # raw names from the page-level extraction
+    is_canonical: bool = True
+    prerequisite_ids: list[uuid.UUID] = []  # resolved links (only canonical concepts have any)
+
+
+class GraphNodeOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: Optional[str] = None
+    pages: list[int]  # every page where this concept appears
+
+
+class GraphEdgeOut(BaseModel):
+    prerequisite_id: uuid.UUID  # learn this first...
+    concept_id: uuid.UUID  # ...before this
+    source: str  # "page" (name match) or "llm" (chapter linking pass)
+
+
+class ChapterGraphOut(BaseModel):
+    chapter_id: uuid.UUID
+    status: str
+    nodes: list[GraphNodeOut]
+    edges: list[GraphEdgeOut]
+    report: Optional[dict] = None
 
 
 class PageOut(BaseModel):

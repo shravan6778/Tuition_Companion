@@ -1,4 +1,5 @@
 import json
+import re
 
 
 class FakeLLMProvider:
@@ -8,6 +9,9 @@ class FakeLLMProvider:
     model_name = "fake"
 
     def complete_json(self, system: str, user: str) -> str:
+        if user.startswith("CONCEPTS:\n"):  # chapter linking pass: each concept depends on the previous one
+            n = len(re.findall(r"^\d+\. ", user, flags=re.MULTILINE))
+            return json.dumps({"edges": [{"concept": i, "prerequisites": [i - 1]} for i in range(2, n + 1)]})
         text = user.split("TEXT:\n", 1)[-1]
         lines: list[str] = []
         for line in text.splitlines():

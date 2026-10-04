@@ -7,12 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.content_library import access
+from app.content_library.graph_view import chapter_graph
 from app.core.config import settings
 from app.core.storage import detect_extension, save_by_hash, sha256_hex
 from app.db.session import get_db, get_session_factory
 from app.models.content import Book, Chapter, ChapterStatus, Page
 from app.pipeline.jobs import is_actively_processing, mark_processing, run_chapter_job
-from app.schemas import BookCreate, BookOut, ChapterCreate, ChapterOut, MemberOut, PageOut, RoomCreate, RoomOut
+from app.schemas import BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, MemberOut, PageOut, RoomCreate, RoomOut
 from app.teacher import rooms as svc
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
@@ -195,3 +196,12 @@ def list_chapter_pages(book_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depend
     if not chapter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found in this book")
     return db.scalars(select(Page).where(Page.chapter_id == chapter.id).order_by(Page.page_number)).all()
+
+
+@router.get("/books/{book_id}/chapters/{chapter_id}/graph", response_model=ChapterGraphOut)
+def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    book = access.get_book_visible_to_teacher(db, teacher, book_id)
+    chapter = db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.book_id == book.id))
+    if not chapter:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found in this book")
+    return chapter_graph(db, chapter)
