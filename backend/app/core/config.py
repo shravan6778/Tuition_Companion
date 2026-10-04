@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     llm_timeout_s: int = 60
     concept_max_chars: int = 12000  # per-page LLM input cap
     link_max_concepts: int = 120  # chapters with more concepts skip the LLM linking pass
+    # --- page matching (pipeline/fingerprint.py, pipeline/matching.py)
+    fingerprint_min_words: int = 15  # shorter pages (covers, blanks) are never fingerprinted or matched
+    reuse_similarity: float = 0.95  # >= this: same page, reuse its concepts (no LLM call)
+    variant_min_similarity: float = 0.60  # >= this (and < reuse): page of a variant/edition
+    variant_min_coverage: float = 0.50  # share of a chapter's pages that must match one book to suggest it
 
 
 settings = Settings()

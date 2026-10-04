@@ -90,7 +90,7 @@ def _chapter(db, book_id, n):
 
 
 def test_identical_page_in_another_chapter_reuses_concepts_without_llm_call(session_factory):
-    pdf = _text_pdf("Matter is anything that occupies space and has mass in our surroundings")
+    pdf = _text_pdf("Matter is anything that occupies space and has mass and we see matter all around us in our surroundings every single day")
     with session_factory() as db:
         book_id, ch1_id = _book_and_chapter(db)
         ch2 = _chapter(db, book_id, 2)

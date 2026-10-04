@@ -6,6 +6,9 @@ import {
   uploadChapterPages,
   retryChapter,
   fetchChapterGraph,
+  fetchVariantSuggestions,
+  confirmVariant,
+  clearVariant,
 } from "../api/content";
 
 const EMPTY_BOOK = {
@@ -17,6 +20,55 @@ const EMPTY_BOOK = {
   school: "",
   is_customized: false,
 };
+
+function VariantBanner({
+  book,
+  books,
+  suggestions,
+  onConfirm,
+  onClear,
+  onDismiss,
+}) {
+  const base =
+    book.variant_of_id && books.find((b) => b.id === book.variant_of_id);
+  const label = (b) =>
+    `${b.board} ${b.class_name} ${b.subject} (${b.publisher}${b.edition ? `, ${b.edition}` : ""})`;
+  if (base) {
+    return (
+      <p style={{ background: "#eef6ff", padding: "0.5rem" }}>
+        Marked as a customized version of <b>{label(base)}</b>.{" "}
+        <button onClick={onClear}>Remove</button>
+      </p>
+    );
+  }
+  const s = suggestions[0];
+  if (!s) return null;
+  const percent = Math.round(s.coverage * 100);
+  return (
+    <div
+      style={{ background: "#fff8e6", padding: "0.5rem", marginBottom: "1rem" }}
+    >
+      {s.kind === "same" ? (
+        <p>
+          {percent}% of your pages are nearly identical to{" "}
+          <b>{label(s.book)}</b>
+          {s.book.is_reference ? " (official)" : ""}. Students can link that
+          book directly; you may not need your own copy.
+        </p>
+      ) : (
+        <p>
+          {percent}% of your pages match <b>{label(s.book)}</b>
+          {s.book.is_reference ? " (official)" : ""}, with edits. Is this a
+          customized version of it?
+        </p>
+      )}
+      <button onClick={() => onConfirm(s.book.id)}>
+        Yes, it's a variant of it
+      </button>{" "}
+      <button onClick={() => onDismiss(s.book.id)}>Not now</button>
+    </div>
+  );
+}
 
 function ConceptMap({ graph }) {
   const nameById = Object.fromEntries(graph.nodes.map((n) => [n.id, n.name]));
@@ -71,6 +123,8 @@ export default function TeacherLibrary() {
   const [newBook, setNewBook] = useState(EMPTY_BOOK);
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [graph, setGraph] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [dismissed, setDismissed] = useState([]); // base book ids hidden for this session
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
   const selectedChapter =
@@ -84,6 +138,45 @@ export default function TeacherLibrary() {
   useEffect(() => {
     loadBooks();
   }, []);
+
+  // Variant suggestions for the selected book (own books only), refreshed as chapters finish.
+  const readyChapters =
+    selectedBook?.chapters?.filter((c) => c.status === "ready").length || 0;
+  useEffect(() => {
+    setSuggestions([]);
+    if (!selectedBook || selectedBook.is_reference || readyChapters === 0)
+      return undefined;
+    let cancelled = false;
+    fetchVariantSuggestions(selectedBook.id)
+      .then(
+        (list) =>
+          !cancelled &&
+          setSuggestions(list.filter((s) => !dismissed.includes(s.book.id))),
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBook?.id, selectedBook?.variant_of_id, readyChapters, dismissed]);
+
+  async function handleConfirmVariant(baseId) {
+    try {
+      await confirmVariant(selectedBook.id, baseId);
+      await loadBooks();
+      setStatusMessage("Saved. This book is now marked as a variant.");
+    } catch (err) {
+      setStatusMessage(`Error: ${err.message}`);
+    }
+  }
+
+  async function handleClearVariant() {
+    try {
+      await clearVariant(selectedBook.id);
+      await loadBooks();
+    } catch (err) {
+      setStatusMessage(`Error: ${err.message}`);
+    }
+  }
 
   // Load the concept map whenever a finished chapter is selected.
   useEffect(() => {
@@ -288,6 +381,16 @@ export default function TeacherLibrary() {
               Chapters for {selectedBook.subject}
               {selectedBook.is_reference ? " (official, read-only)" : ""}
             </h3>
+            {!selectedBook.is_reference && (
+              <VariantBanner
+                book={selectedBook}
+                books={books}
+                suggestions={suggestions}
+                onConfirm={handleConfirmVariant}
+                onClear={handleClearVariant}
+                onDismiss={(id) => setDismissed((d) => [...d, id])}
+              />
+            )}
             <ul>
               {selectedBook.chapters?.map((ch) => (
                 <li

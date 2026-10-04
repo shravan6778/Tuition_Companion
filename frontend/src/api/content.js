@@ -46,6 +46,23 @@ export async function uploadChapterPages(bookId, chapterId, file) {
   });
 }
 
+// "This looks like an edition of book X": suggestions, confirm, clear.
+export async function fetchVariantSuggestions(bookId) {
+  return request(`/teacher/books/${bookId}/variant-suggestions`);
+}
+
+export async function confirmVariant(bookId, baseBookId) {
+  return request(`/teacher/books/${bookId}/variant-of`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base_book_id: baseBookId }),
+  });
+}
+
+export async function clearVariant(bookId) {
+  return request(`/teacher/books/${bookId}/variant-of`, { method: "DELETE" });
+}
+
 // The chapter's prerequisite graph: { nodes, edges, report }.
 export async function fetchChapterGraph(bookId, chapterId) {
   return request(`/teacher/books/${bookId}/chapters/${chapterId}/graph`);

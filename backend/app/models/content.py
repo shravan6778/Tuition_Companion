@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import CheckConstraint, Column, DateTime, Integer, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Integer, LargeBinary, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -61,6 +61,7 @@ class Chapter(Base):
     source_sha256 = Column(String(64), nullable=True)  # identical re-upload of a ready chapter is a no-op
     processing_started_at = Column(DateTime(timezone=True), nullable=True)
     graph_report = Column(JSON, nullable=True)  # summary of the last concept-linking pass (see pipeline/graph.py)
+    match_report = Column(JSON, nullable=True)  # how this chapter matched known pages/books (see pipeline/matching.py)
 
     book = relationship("Book", back_populates="chapters")
     pages = relationship("Page", back_populates="chapter", cascade="all, delete-orphan")
@@ -76,10 +77,23 @@ class Page(Base):
     image_url = Column(String, nullable=True)
     verified = Column(Boolean, default=False)  # Teacher = verified, Student = unverified
     uploaded_by_id = Column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    fingerprint = Column(String, nullable=True)  # MinHash signature
+    fingerprint = Column(LargeBinary, nullable=True)  # MinHash signature (512 bytes); None for very short pages
 
     chapter = relationship("Chapter", back_populates="pages")
     concepts = relationship("Concept", back_populates="page", cascade="all, delete-orphan")
+    bands = relationship("PageBand", back_populates="page", cascade="all, delete-orphan")
+
+
+class PageBand(Base):
+    """LSH index: a page shares >= 1 band key with every page it is similar to, so matching looks up
+    ~32 keys instead of comparing against every page in the database."""
+    __tablename__ = "page_bands"
+
+    page_id = Column(Uuid, ForeignKey("pages.id", ondelete="CASCADE"), primary_key=True)
+    key = Column(BigInteger, primary_key=True, index=True)
+
+    page = relationship("Page", back_populates="bands")
+
 
 class Concept(Base):
     __tablename__ = "concepts"

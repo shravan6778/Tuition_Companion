@@ -99,6 +99,30 @@ class ChapterGraphOut(BaseModel):
     report: Optional[dict] = None
 
 
+class VariantSuggestionOut(BaseModel):
+    book: "BookBrief"
+    kind: str  # "same" (near-identical pages) or "variant" (an edition/customization of that book)
+    coverage: float  # share of your uploaded pages that match it
+    avg_similarity: float
+    matched_pages: int
+    pages_checked: int
+
+
+class BookBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    board: str
+    class_name: str
+    subject: str
+    publisher: str
+    edition: Optional[str] = None
+    is_reference: bool = False
+
+
+class VariantOfIn(BaseModel):
+    base_book_id: uuid.UUID
+
+
 class PageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

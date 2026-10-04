@@ -22,7 +22,7 @@ def test_minhash_fingerprint_identical_and_near_duplicate():
     fp2 = compute_minhash(text2)
     fp_diff = compute_minhash(unrelated_text)
 
-    # Identical/near-identical should produce a high similarity score[cite: 2]
+    # Identical/near-identical should produce a high similarity score
     sim_high = compute_jaccard_similarity(fp1, fp2)
     assert sim_high >= 0.85
 

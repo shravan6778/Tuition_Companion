@@ -4,8 +4,16 @@ into the reference corpus.
 Run: python -m app.db.seed_ncert
 """
 from app.db.session import SessionLocal
-from app.models.content import Book, Chapter, Page, Concept
-from app.pipeline.fingerprint import compute_minhash
+from app.models.content import Book, Chapter, ChapterStatus, Page, Concept
+from app.pipeline.graph import build_chapter_graph
+from app.pipeline.fingerprint import apply_fingerprint
+
+
+class _NoLinksLLM:
+    """The seeded concepts already name their prerequisites, so no model call is needed to link them."""
+
+    def complete_json(self, system: str, user: str) -> str:
+        return '{"edges": []}'
 
 
 def seed_ncert_corpus():
@@ -52,8 +60,8 @@ def seed_ncert_corpus():
             page_number=1,
             content_text=sample_p1_text,
             verified=True,  # Reference corpus is pre-verified
-            fingerprint=compute_minhash(sample_p1_text),
         )
+        apply_fingerprint(page1, sample_p1_text)
         db.add(page1)
         db.flush()
 
@@ -72,6 +80,10 @@ def seed_ncert_corpus():
             prerequisites=["Definition of Matter"],
         )
         db.add_all([c1, c2])
+        db.flush()
+
+        ch1.status = ChapterStatus.READY  # visible to students; pages + concepts are already in place
+        build_chapter_graph(db, ch1, _NoLinksLLM())
 
         db.commit()
         print("NCERT Reference Corpus successfully seeded!")

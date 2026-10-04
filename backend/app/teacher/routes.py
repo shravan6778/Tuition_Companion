@@ -13,7 +13,7 @@ from app.core.storage import detect_extension, save_by_hash, sha256_hex
 from app.db.session import get_db, get_session_factory
 from app.models.content import Book, Chapter, ChapterStatus, Page
 from app.pipeline.jobs import is_actively_processing, mark_processing, run_chapter_job
-from app.schemas import BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, MemberOut, PageOut, RoomCreate, RoomOut
+from app.schemas import BookBrief, BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, VariantOfIn, VariantSuggestionOut, MemberOut, PageOut, RoomCreate, RoomOut
 from app.teacher import rooms as svc
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
@@ -205,3 +205,70 @@ def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depends
     if not chapter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found in this book")
     return chapter_graph(db, chapter)
+
+
+# ---- variants: "this looks like an edition of book X" ---------------------------------------
+
+@router.get("/books/{book_id}/variant-suggestions", response_model=list[VariantSuggestionOut])
+def variant_suggestions(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Books (official, or your own) whose pages match what you've uploaded into this book, pooled over all
+    its finished chapters. Never includes other teachers' private books."""
+    book = access.get_owned_book(db, teacher, book_id)
+    chapters = db.scalars(
+        select(Chapter).where(Chapter.book_id == book.id, Chapter.status == ChapterStatus.READY)
+    ).all()
+    pages_checked = sum((c.match_report or {}).get("pages_checked", 0) for c in chapters)
+    if pages_checked == 0:
+        return []
+
+    pooled: dict[str, dict] = {}
+    for chapter in chapters:
+        for s in (chapter.match_report or {}).get("suggestions", []):
+            agg = pooled.setdefault(s["book_id"], {"matched": 0, "sim_sum": 0.0})
+            agg["matched"] += s["matched_pages"]
+            agg["sim_sum"] += s["avg_similarity"] * s["matched_pages"]
+
+    out = []
+    for base_id, agg in pooled.items():
+        coverage = agg["matched"] / pages_checked
+        if coverage < settings.variant_min_coverage or uuid.UUID(base_id) == book.variant_of_id:
+            continue
+        try:  # re-check visibility now: the report is old, the book may have been deleted or changed
+            base = access.get_book_visible_to_teacher(db, teacher, uuid.UUID(base_id))
+        except HTTPException:
+            continue
+        avg = agg["sim_sum"] / agg["matched"]
+        out.append(VariantSuggestionOut(
+            book=BookBrief.model_validate(base),
+            kind="same" if avg >= settings.reuse_similarity else "variant",
+            coverage=round(min(coverage, 1.0), 3), avg_similarity=round(avg, 3),
+            matched_pages=agg["matched"], pages_checked=pages_checked,
+        ))
+    return sorted(out, key=lambda v: (v.coverage, v.avg_similarity), reverse=True)[:3]
+
+
+@router.post("/books/{book_id}/variant-of", response_model=BookOut)
+def confirm_variant(book_id: uuid.UUID, body: VariantOfIn, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """The teacher confirms 'my book is a variant of that one'."""
+    book = access.get_owned_book(db, teacher, book_id)
+    base = access.get_book_visible_to_teacher(db, teacher, body.base_book_id)
+    if base.id == book.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A book can't be a variant of itself")
+    ancestor, hops = base, 0
+    while ancestor is not None and hops < 50:  # refuse loops: base must not already descend from this book
+        if ancestor.variant_of_id == book.id:
+            raise HTTPException(status.HTTP_409_CONFLICT, "That book is already a variant of this one")
+        ancestor = db.get(Book, ancestor.variant_of_id) if ancestor.variant_of_id else None
+        hops += 1
+    book.variant_of_id = base.id
+    db.commit()
+    db.refresh(book)
+    return book
+
+
+@router.delete("/books/{book_id}/variant-of", status_code=status.HTTP_204_NO_CONTENT)
+def clear_variant(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    book = access.get_owned_book(db, teacher, book_id)
+    book.variant_of_id = None
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
