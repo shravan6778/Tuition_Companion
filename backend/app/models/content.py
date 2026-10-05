@@ -79,7 +79,8 @@ class Page(Base):
     content_text = Column(Text, nullable=False)
     layout_data = Column(JSON, nullable=True)  # Azure Document Intelligence layout data
     image_url = Column(String, nullable=True)
-    verified = Column(Boolean, default=False)  # Teacher = verified, Student = unverified
+    needs_review = Column(Boolean, nullable=False, default=False, server_default="false")  # pipeline doubts about this page
+    review_note = Column(String(200), nullable=True)  # why (shown to the teacher)
     uploaded_by_id = Column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     fingerprint = Column(LargeBinary, nullable=True)  # MinHash signature (512 bytes); None for very short pages
 

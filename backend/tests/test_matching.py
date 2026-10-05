@@ -76,7 +76,7 @@ def make_book_chapter(db, owner=None):
 
 
 def add_page(db, ch, number, text):
-    page = Page(chapter_id=ch.id, page_number=number, content_text=text, verified=True)
+    page = Page(chapter_id=ch.id, page_number=number, content_text=text)
     apply_fingerprint(page, text)
     db.add(page)
     db.flush()
@@ -103,8 +103,8 @@ def test_rebuild_recomputes_fingerprints_and_index(session_factory):
     from app.db.rebuild_fingerprints import rebuild
     with session_factory() as db:
         _, ch = make_book_chapter(db)
-        p = Page(chapter_id=ch.id, page_number=1, content_text=page_text("zeta"), verified=True)
-        short = Page(chapter_id=ch.id, page_number=2, content_text="Contents", verified=True)
+        p = Page(chapter_id=ch.id, page_number=1, content_text=page_text("zeta"))
+        short = Page(chapter_id=ch.id, page_number=2, content_text="Contents")
         db.add_all([p, short])
         db.flush()
         db.add(PageBand(page_id=p.id, key=12345))  # stale row from an older scheme

@@ -59,7 +59,6 @@ def seed_ncert_corpus():
             chapter_id=ch1.id,
             page_number=1,
             content_text=sample_p1_text,
-            verified=True,  # Reference corpus is pre-verified
         )
         apply_fingerprint(page1, sample_p1_text)
         db.add(page1)

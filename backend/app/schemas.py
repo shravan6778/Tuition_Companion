@@ -189,7 +189,8 @@ class PageOut(BaseModel):
     chapter_id: uuid.UUID
     page_number: int
     content_text: str
-    verified: bool
+    needs_review: bool = False
+    review_note: Optional[str] = None
     concepts: list[ConceptOut] = []
 
 

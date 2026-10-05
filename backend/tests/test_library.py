@@ -36,29 +36,3 @@ def test_book_crud_and_student_link(session_factory):
         my_books = db.scalars(select(Book).join(student_book).where(student_book.c.student_id == student.id)).all()
         assert len(my_books) == 1
         assert my_books[0].id == book.id
-
-
-def test_page_verification_flag(session_factory):
-    """Teacher uploads are verified; student uploads are unverified until confirmed."""
-    with session_factory() as db:
-        book = Book(board="CBSE", class_name="Class 9", subject="Physics", publisher="NCERT", is_reference=True)
-        db.add(book)
-        db.flush()
-
-        chapter = Chapter(book_id=book.id, title="Motion", sequence_num=1)
-        db.add(chapter)
-        db.flush()
-
-        teacher = User(supertokens_user_id=f"tch_{uuid.uuid4()}", name="Teacher", username="t1", phone="111", role=Role.teacher)
-        student = User(supertokens_user_id=f"stu_{uuid.uuid4()}", name="Student", username="s1", phone="222", role=Role.student)
-        db.add_all([teacher, student])
-        db.flush()
-
-        teacher_page = Page(chapter_id=chapter.id, page_number=1, content_text="Velocity", verified=True, uploaded_by_id=teacher.id)
-        student_page = Page(chapter_id=chapter.id, page_number=2, content_text="Doubt", verified=False, uploaded_by_id=student.id)
-        
-        db.add_all([teacher_page, student_page])
-        db.commit()
-
-        assert teacher_page.verified is True
-        assert student_page.verified is False

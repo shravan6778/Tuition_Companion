@@ -79,3 +79,13 @@ def fake_providers(monkeypatch):
 
     monkeypatch.setattr(settings, "ocr_provider", "fake")
     monkeypatch.setattr(settings, "llm_provider", "fake")
+
+
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    """Rate-limit counters are process-wide; every test starts with a clean slate."""
+    from app.core.ratelimit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()

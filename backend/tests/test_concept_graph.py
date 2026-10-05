@@ -46,7 +46,7 @@ def make_chapter(db):
 
 def add_page(db, ch, number, *concepts):
     """concepts: (name, [raw prerequisite names]) tuples."""
-    page = Page(chapter_id=ch.id, page_number=number, content_text=f"p{number}", verified=True)
+    page = Page(chapter_id=ch.id, page_number=number, content_text=f"p{number}")
     db.add(page)
     db.flush()
     made = []

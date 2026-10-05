@@ -14,7 +14,7 @@ def test_page_concept_hierarchy_and_prerequisites(session_factory):
         db.add(chapter)
         db.flush()
 
-        page = Page(chapter_id=chapter.id, page_number=1, content_text="Equations.", verified=True)
+        page = Page(chapter_id=chapter.id, page_number=1, content_text="Equations.")
         db.add(page)
         db.flush()
 
@@ -41,7 +41,7 @@ def test_concepts_cascade_delete_with_page(session_factory):
         db.add(chapter)
         db.flush()
 
-        page = Page(chapter_id=chapter.id, page_number=5, content_text="Equations", verified=True)
+        page = Page(chapter_id=chapter.id, page_number=5, content_text="Equations")
         db.add(page)
         db.flush()
 

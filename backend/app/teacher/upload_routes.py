@@ -8,6 +8,7 @@ from app.auth.dependencies import require_teacher
 from app.content_library import access
 from app.content_library import upload as uploads
 from app.core.config import settings
+from app.core.ratelimit import limiter
 from app.db.session import get_db, get_session_factory
 from app.pipeline.jobs import run_chapter_job
 from app.schemas import (
@@ -22,6 +23,7 @@ def upload_front_pages(file: UploadFile = File(...), teacher=Depends(require_tea
     """Step 1 of adding a book: the cover + publisher/edition pages (a few pages, PDF or image).
     Returns the metadata the system read and any known books that already match it. Creates no Book:
     confirm by calling POST /teacher/books with the draft_id and the (edited) metadata."""
+    limiter.check("front-pages", str(teacher.id), settings.rate_front_pages_per_hour, 3600)
     upload = uploads.read_validated_upload(file, settings.max_upload_mb)
     draft, metadata, matches = uploads.create_front_pages_draft(db, teacher, upload)
     return FrontPagesDraftOut(
@@ -36,6 +38,7 @@ def plan_whole_book(book_id: uuid.UUID, file: UploadFile = File(...), teacher=De
     """Upload the entire textbook (PDF). Nothing is processed yet: the response proposes a chapter split
     (from the PDF's bookmarks, if any) for the teacher to review before confirming."""
     book = access.get_owned_book(db, teacher, book_id)
+    limiter.check("whole-book-plan", str(teacher.id), settings.rate_whole_book_plan_per_hour, 3600)
     upload = uploads.read_validated_upload(file, settings.max_whole_book_mb, pdf_only=True)
     draft, proposed = uploads.create_whole_book_plan(db, teacher, book, upload)
     return WholeBookPlanOut(draft_id=draft.id, page_count=draft.page_count, proposed_chapters=proposed)

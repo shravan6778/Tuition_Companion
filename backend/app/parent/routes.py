@@ -4,6 +4,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_parent
+from app.core.config import settings
+from app.core.ratelimit import limiter
 from app.db.session import get_db
 from app.models import ParentStudentLink, Role, Room, RoomMember, User
 from app.schemas import ChildOut, LinkStudentIn, RoomBrief
@@ -18,6 +20,7 @@ def ping(user=Depends(require_parent)):
 
 @router.post("/link", response_model=ChildOut)
 def link_student(body: LinkStudentIn, parent=Depends(require_parent), db: Session = Depends(get_db)):
+    limiter.check("parent-link", str(parent.id), settings.rate_parent_link_per_min, 60)
     student = db.scalar(select(User).where(User.link_code == body.link_code, User.role == Role.student))
     if student is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid link code")

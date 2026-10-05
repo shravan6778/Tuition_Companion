@@ -9,11 +9,14 @@ from app.llm import get_llm_provider
 from app.models.content import Chapter, ChapterStatus, Concept, ConceptEdge, Page
 from app.ocr import get_ocr_provider
 from app.pipeline.concepts import ConceptExtractionError, extract_page_concepts
-from app.pipeline.fingerprint import apply_fingerprint, band_keys, compute_minhash
+from app.pipeline.fingerprint import apply_fingerprint, band_keys, compute_minhash, tokenize
 from app.pipeline.graph import build_chapter_graph
 from app.pipeline.matching import PageMatch, find_matches, summarize_book_matches
 
 logger = logging.getLogger(__name__)
+
+REVIEW_MIN_WORDS = 40  # a page this long that yields zero concepts is suspicious
+MAX_REVIEW_REPORTED = 50
 
 
 class PipelineOrchestrator:
@@ -73,6 +76,7 @@ class PipelineOrchestrator:
         created: list[Page] = []
         per_page_matches: list[list[PageMatch]] = []
         pages_checked = pages_reused = 0
+        review_pages: list[dict] = []
         for p_data in layout["pages"]:
             text, number = p_data["text"], p_data["page_number"]
 
@@ -86,7 +90,7 @@ class PipelineOrchestrator:
 
             page = Page(
                 chapter_id=chapter.id, page_number=number, content_text=text,
-                layout_data=p_data.get("lines"), verified=True, uploaded_by_id=user_id,
+                layout_data=p_data.get("lines"), uploaded_by_id=user_id,
             )
             apply_fingerprint(page, text)
             self.db.add(page)
@@ -107,6 +111,11 @@ class PipelineOrchestrator:
                     raise ProcessingError(f"{exc} (page {number})") from exc
                 concepts = [(c.name, c.description, c.learning_objectives, c.prerequisites) for c in extracted]
 
+            if not concepts and len(tokenize(text)) >= REVIEW_MIN_WORDS:
+                page.needs_review = True
+                page.review_note = "No concepts were found on a page with a lot of text. It may be a bad scan."
+                review_pages.append({"page": number, "note": page.review_note})
+
             for position, (name, description, objectives, prerequisites) in enumerate(concepts):
                 self.db.add(Concept(
                     page_id=page.id, name=name, description=description, position=position,
@@ -125,5 +134,6 @@ class PipelineOrchestrator:
 
         # A chapter only becomes 'ready' (the caller's commit) once its concepts are linked into a graph.
         self.db.flush()
-        build_chapter_graph(self.db, chapter, self.llm)
+        report = build_chapter_graph(self.db, chapter, self.llm)
+        chapter.graph_report = {**report, "review_pages": review_pages[:MAX_REVIEW_REPORTED]}
         return created

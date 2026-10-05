@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import require_student
 from app.content_library import access
 from app.content_library.graph_view import chapter_graph
+from app.core.config import settings
+from app.core.ratelimit import limiter
 from app.db.session import get_db
 from app.models.content import Book, Chapter, ChapterStatus, Page, student_book
 from app.models.room import Room, RoomMember
@@ -32,6 +34,7 @@ def ping(user=Depends(require_student)):
 
 @router.post("/rooms/join", response_model=RoomOut)
 def join_room(body: JoinRoomIn, student=Depends(require_student), db: Session = Depends(get_db)):
+    limiter.check("join-room", str(student.id), settings.rate_join_per_min, 60)
     room = db.scalar(select(Room).where(func.lower(Room.join_code) == body.join_code.lower()))
     if room is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid join code")
