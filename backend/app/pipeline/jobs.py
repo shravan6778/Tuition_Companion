@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
 from app.core.errors import ProcessingError
+from app.content_library.link_requests import fulfill_requests_for_chapter
 from app.core.storage import read_file
 from app.models.content import Chapter, ChapterStatus
 from app.pipeline.orchestrator import PipelineOrchestrator
@@ -51,6 +52,7 @@ def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory) 
             PipelineOrchestrator(db).process_chapter_file(chapter, data, ext, user_id)
             chapter.status = ChapterStatus.READY
             chapter.error_message = None
+            fulfill_requests_for_chapter(db, chapter)  # students who asked for this chapter get closure
             db.commit()
         except Exception as exc:
             db.rollback()

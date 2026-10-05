@@ -9,7 +9,7 @@ import TeacherDashboard from "./teacher/TeacherDashboard.jsx";
 import RoomDetail from "./teacher/RoomDetail.jsx";
 
 // Phase 2 content library
-import TeacherLibrary from "./components/TeacherLibrary.jsx";
+import TeacherLibrary from "./teacher/TeacherLibrary.jsx";
 
 const guard = (role, el) => (
   <ProtectedRoute roles={[role]}>{el}</ProtectedRoute>

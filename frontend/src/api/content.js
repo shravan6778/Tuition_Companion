@@ -46,6 +46,52 @@ export async function uploadChapterPages(bookId, chapterId, file) {
   });
 }
 
+// --- Front pages first, whole-textbook upload, bulk link ---
+
+// Step 1 of adding a book: cover + publisher/edition pages -> proposed metadata + matching known books.
+export async function uploadFrontPages(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request("/teacher/book-drafts/front-pages", { method: "POST", body: formData });
+}
+
+export async function planWholeBook(bookId, file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request(`/teacher/books/${bookId}/whole-book/plan`, { method: "POST", body: formData });
+}
+
+export async function confirmWholeBook(bookId, draftId, chapters) {
+  return request(`/teacher/books/${bookId}/whole-book/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft_id: draftId, chapters }),
+  });
+}
+
+// Link a book to every student currently in a single-class room.
+export async function bulkLinkBook(roomId, bookId) {
+  return request(`/teacher/rooms/${roomId}/books/${bookId}/link`, { method: "POST" });
+}
+
+// --- Chapter requests (teacher inbox) ---
+
+export async function fetchTeacherRequests(status = "open") {
+  return request(`/teacher/chapter-requests?status=${status}`);
+}
+
+export async function dismissRequest(requestId) {
+  return request(`/teacher/chapter-requests/${requestId}/dismiss`, { method: "POST" });
+}
+
+export async function fulfillRequest(requestId, chapterId = null) {
+  return request(`/teacher/chapter-requests/${requestId}/fulfill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chapterId ? { chapter_id: chapterId } : {}),
+  });
+}
+
 // "This looks like an edition of book X": suggestions, confirm, clear.
 export async function fetchVariantSuggestions(bookId) {
   return request(`/teacher/books/${bookId}/variant-suggestions`);
@@ -100,4 +146,22 @@ export async function unlinkBook(bookId) {
 
 export async function fetchChapterPages(bookId, chapterId) {
   return request(`/student/books/${bookId}/chapters/${chapterId}/pages`);
+}
+
+// --- Student: ask the teacher to add a chapter ---
+
+export async function requestChapter(bookId, chapterHint) {
+  return request(`/student/books/${bookId}/chapter-requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chapter_hint: chapterHint }),
+  });
+}
+
+export async function fetchMyRequests() {
+  return request("/student/chapter-requests");
+}
+
+export async function cancelRequest(requestId) {
+  return request(`/student/chapter-requests/${requestId}`, { method: "DELETE" });
 }

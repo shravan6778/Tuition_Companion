@@ -124,3 +124,8 @@ def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends
     if not chapter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
     return chapter_graph(db, chapter)
+
+
+from app.student.request_routes import router as _request_router  # noqa: E402
+
+router.include_router(_request_router)

@@ -7,13 +7,16 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.content_library import access
+from app.content_library import upload as uploads
 from app.content_library.graph_view import chapter_graph
+from app.content_library.search import search_books
 from app.core.config import settings
-from app.core.storage import detect_extension, save_by_hash, sha256_hex
+from app.core.storage import save_by_hash
 from app.db.session import get_db, get_session_factory
-from app.models.content import Book, Chapter, ChapterStatus, Page
+from app.models.content import Book, Chapter, ChapterStatus, Page, student_book
+from app.models.room import RoomMember, RoomType
 from app.pipeline.jobs import is_actively_processing, mark_processing, run_chapter_job
-from app.schemas import BookBrief, BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, VariantOfIn, VariantSuggestionOut, MemberOut, PageOut, RoomCreate, RoomOut
+from app.schemas import BulkLinkOut, BookBrief, BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, VariantOfIn, VariantSuggestionOut, MemberOut, PageOut, RoomCreate, RoomOut
 from app.teacher import rooms as svc
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
@@ -42,6 +45,26 @@ def room_members(room_id: uuid.UUID, teacher=Depends(require_teacher), db: Sessi
     return svc.list_members(db, room)
 
 
+@router.post("/rooms/{room_id}/books/{book_id}/link", response_model=BulkLinkOut)
+def bulk_link_book(room_id: uuid.UUID, book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Convenience: link a book to every student currently in a single-class room. The links stay per-student
+    (the room itself holds no content), and students who join later still link for themselves."""
+    room = svc.get_owned_room(db, teacher, room_id)
+    if room.room_type != RoomType.single_class:
+        raise HTTPException(409, "Bulk linking is for single-class rooms, where everyone uses the same book. "
+                                 "In a mixed room, students link their own books.")
+    book = access.get_book_visible_to_teacher(db, teacher, book_id)
+    members = set(db.scalars(select(RoomMember.user_id).where(RoomMember.room_id == room.id)).all())
+    already = set(db.scalars(
+        select(student_book.c.student_id).where(student_book.c.book_id == book.id, student_book.c.student_id.in_(members))
+    ).all()) if members else set()
+    new = members - already
+    if new:
+        db.execute(student_book.insert(), [{"student_id": sid, "book_id": book.id} for sid in new])
+        db.commit()
+    return BulkLinkOut(linked=len(new), already_linked=len(already), total_students=len(members))
+
+
 # ---- books (reference corpus + this teacher's own uploads only) ------------------
 
 @router.post("/books", response_model=BookOut, status_code=status.HTTP_201_CREATED)
@@ -49,6 +72,11 @@ def create_book(body: BookCreate, teacher=Depends(require_teacher), db: Session 
     if body.variant_of_id is not None:
         # A variant may only point at a book this teacher can already see (never someone else's private book).
         access.get_book_visible_to_teacher(db, teacher, body.variant_of_id)
+    draft = None
+    if body.draft_id is not None:
+        draft = uploads.get_draft(db, teacher, body.draft_id, "front_pages")
+    elif settings.require_front_pages:
+        raise HTTPException(422, "Upload the book's cover and publisher/edition pages first")
     book = Book(
         board=body.board.strip(),
         class_name=body.class_name.strip(),
@@ -60,8 +88,13 @@ def create_book(body: BookCreate, teacher=Depends(require_teacher), db: Session 
         variant_of_id=body.variant_of_id,
         is_reference=False,  # reference books are created only by the seed/ingest scripts
         owner_teacher_id=teacher.id,
+        metadata_source="front_pages" if draft else "manual",
+        extracted_metadata=(draft.payload or {}).get("metadata") if draft else None,
+        front_pages_file=draft.source_file if draft else None,
     )
     db.add(book)
+    if draft:
+        db.delete(draft)  # consumed: the teacher has confirmed the metadata
     db.commit()
     db.refresh(book)
     return book
@@ -70,6 +103,7 @@ def create_book(body: BookCreate, teacher=Depends(require_teacher), db: Session 
 @router.get("/books", response_model=list[BookOut])
 def list_books(
     scope: Literal["all", "mine", "reference"] = "all",
+    q: Optional[str] = None,
     board: Optional[str] = None,
     class_name: Optional[str] = None,
     subject: Optional[str] = None,
@@ -77,16 +111,11 @@ def list_books(
     teacher=Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    query = access.teacher_visible_books(teacher)
-    if scope == "mine":
-        query = query.where(Book.owner_teacher_id == teacher.id)
-    elif scope == "reference":
-        query = query.where(Book.is_reference.is_(True))
-    if board: query = query.where(Book.board == board)
-    if class_name: query = query.where(Book.class_name == class_name)
-    if subject: query = query.where(Book.subject == subject)
-    if publisher: query = query.where(Book.publisher == publisher)
-    return db.scalars(query.order_by(Book.is_reference.desc(), Book.board, Book.class_name, Book.subject)).all()
+    """Search the library: official books + your own. Filters are case-insensitive 'contains';
+    `q` matches any of board/class/subject/publisher/edition/school; class 'IX' and 'Class 9' are the same."""
+    query = search_books(db, teacher, q=q, board=board, class_name=class_name, subject=subject,
+                         publisher=publisher, scope=scope)
+    return db.scalars(query).all()
 
 
 @router.get("/books/{book_id}", response_model=BookOut)
@@ -139,17 +168,8 @@ def teacher_upload_pages(
     if is_actively_processing(chapter):
         raise HTTPException(status.HTTP_409_CONFLICT, "This chapter is still being processed. Please wait for it to finish.")
 
-    max_bytes = settings.max_upload_mb * 1024 * 1024
-    data = file.file.read(max_bytes + 1)
-    if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The uploaded file is empty")
-    if len(data) > max_bytes:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"File is too large (max {settings.max_upload_mb} MB)")
-    ext = detect_extension(data)  # by file content, never the filename
-    if ext is None:
-        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Please upload a PDF, PNG or JPG file")
-
-    digest = sha256_hex(data)
+    upload = uploads.read_validated_upload(file, settings.max_upload_mb)
+    data, ext, digest = upload.data, upload.ext, upload.sha256
     if chapter.status == ChapterStatus.READY and chapter.source_sha256 == digest:
         response.status_code = status.HTTP_200_OK  # same file as last time: nothing to redo
         return chapter
@@ -272,3 +292,11 @@ def clear_variant(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Sess
     book.variant_of_id = None
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# front-pages drafts, whole-textbook upload, and student chapter requests live in their own modules
+from app.teacher.request_routes import router as _request_router  # noqa: E402
+from app.teacher.upload_routes import router as _upload_router  # noqa: E402
+
+router.include_router(_upload_router)
+router.include_router(_request_router)

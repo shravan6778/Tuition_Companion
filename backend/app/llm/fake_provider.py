@@ -9,6 +9,16 @@ class FakeLLMProvider:
     model_name = "fake"
 
     def complete_json(self, system: str, user: str) -> str:
+        if user.startswith("FRONT PAGES TEXT:\n"):  # reads 'Board: CBSE' style lines
+            found = {}
+            for key in ("board", "class", "subject", "publisher", "edition", "school"):
+                m = re.search(rf"^\s*{key}\s*:\s*(.+)$", user, flags=re.IGNORECASE | re.MULTILINE)
+                found[key] = m.group(1).strip() if m else None
+            return json.dumps({
+                "board": found["board"], "class_name": found["class"], "subject": found["subject"],
+                "publisher": found["publisher"], "edition": found["edition"],
+                "is_customized": bool(found["school"]), "school": found["school"],
+            })
         if user.startswith("CONCEPTS:\n"):  # chapter linking pass: each concept depends on the previous one
             n = len(re.findall(r"^\d+\. ", user, flags=re.MULTILINE))
             return json.dumps({"edges": [{"concept": i, "prerequisites": [i - 1]} for i in range(2, n + 1)]})

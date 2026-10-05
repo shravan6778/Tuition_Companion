@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../auth/AuthContext";
 import api from "../shared/api";
 import Header from "../shared/Header";
+import ChapterRequestPanel from "./ChapterRequestPanel.jsx";
 import {
   fetchMyLinkedBooks,
   fetchStudentLibrary,
@@ -113,6 +114,8 @@ export default function StudentDashboard() {
               ))}
             </select>
           </div>
+
+          <ChapterRequestPanel linkedBooks={linkedBooks} />
         </div>
 
         {/* Room Section */}

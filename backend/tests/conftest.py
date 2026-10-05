@@ -26,9 +26,19 @@ class FakeSession:
 
 @pytest.fixture()
 def session_factory():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine, autoflush=False)
+    # Default: in-memory SQLite. Set TEST_DATABASE_URL (e.g. a throwaway local Postgres) to run the same
+    # tests on the real database engine; tables are created and dropped around every test.
+    url = os.environ.get("TEST_DATABASE_URL")
+    if url:
+        engine = create_engine(url)
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+    else:
+        engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(engine)
+    yield sessionmaker(bind=engine, autoflush=False)
+    if url:
+        engine.dispose()
 
 
 @pytest.fixture()

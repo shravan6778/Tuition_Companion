@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from "react";
+import api from "../shared/api";
+import NewBookWizard from "./NewBookWizard.jsx";
+import WholeBookUpload from "./WholeBookUpload.jsx";
+import ChapterRequests from "./ChapterRequests.jsx";
 import {
   fetchBooks,
-  createBook,
+  bulkLinkBook,
   createChapter,
   uploadChapterPages,
   retryChapter,
@@ -11,28 +15,53 @@ import {
   clearVariant,
 } from "../api/content";
 
-const EMPTY_BOOK = {
-  board: "",
-  class_name: "",
-  subject: "",
-  publisher: "",
-  edition: "",
-  school: "",
-  is_customized: false,
-};
+// Convenience: link this book to every student in one of the teacher's single-class rooms.
+function LinkToRoom({ book }) {
+  const [rooms, setRooms] = useState([]);
+  const [roomId, setRoomId] = useState("");
+  const [note, setNote] = useState("");
 
-function VariantBanner({
-  book,
-  books,
-  suggestions,
-  onConfirm,
-  onClear,
-  onDismiss,
-}) {
-  const base =
-    book.variant_of_id && books.find((b) => b.id === book.variant_of_id);
-  const label = (b) =>
-    `${b.board} ${b.class_name} ${b.subject} (${b.publisher}${b.edition ? `, ${b.edition}` : ""})`;
+  useEffect(() => {
+    api
+      .get("/teacher/rooms")
+      .then((res) => setRooms((res.data || []).filter((r) => r.room_type === "single_class")))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => setNote(""), [book.id]);
+
+  if (rooms.length === 0) return null;
+
+  async function link() {
+    try {
+      const r = await bulkLinkBook(roomId, book.id);
+      setNote(
+        `Linked for ${r.linked} student(s)` +
+          (r.already_linked ? `, ${r.already_linked} already had it` : "") +
+          `. Students who join later link it themselves.`,
+      );
+    } catch (err) {
+      setNote(err.message);
+    }
+  }
+
+  return (
+    <p>
+      <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+        <option value="">Link this book to all students in...</option>
+        {rooms.map((r) => (
+          <option key={r.id} value={r.id}>{r.name} ({r.member_count} students)</option>
+        ))}
+      </select>{" "}
+      <button type="button" disabled={!roomId} onClick={link}>Link</button>{" "}
+      <span style={{ color: "#444" }}>{note}</span>
+    </p>
+  );
+}
+
+function VariantBanner({ book, books, suggestions, onConfirm, onClear, onDismiss }) {
+  const base = book.variant_of_id && books.find((b) => b.id === book.variant_of_id);
+  const label = (b) => `${b.board} ${b.class_name} ${b.subject} (${b.publisher}${b.edition ? `, ${b.edition}` : ""})`;
   if (base) {
     return (
       <p style={{ background: "#eef6ff", padding: "0.5rem" }}>
@@ -45,15 +74,12 @@ function VariantBanner({
   if (!s) return null;
   const percent = Math.round(s.coverage * 100);
   return (
-    <div
-      style={{ background: "#fff8e6", padding: "0.5rem", marginBottom: "1rem" }}
-    >
+    <div style={{ background: "#fff8e6", padding: "0.5rem", marginBottom: "1rem" }}>
       {s.kind === "same" ? (
         <p>
-          {percent}% of your pages are nearly identical to{" "}
-          <b>{label(s.book)}</b>
-          {s.book.is_reference ? " (official)" : ""}. Students can link that
-          book directly; you may not need your own copy.
+          {percent}% of your pages are nearly identical to <b>{label(s.book)}</b>
+          {s.book.is_reference ? " (official)" : ""}. Students can link that book
+          directly; you may not need your own copy.
         </p>
       ) : (
         <p>
@@ -62,9 +88,7 @@ function VariantBanner({
           customized version of it?
         </p>
       )}
-      <button onClick={() => onConfirm(s.book.id)}>
-        Yes, it's a variant of it
-      </button>{" "}
+      <button onClick={() => onConfirm(s.book.id)}>Yes, it's a variant of it</button>{" "}
       <button onClick={() => onDismiss(s.book.id)}>Not now</button>
     </div>
   );
@@ -89,9 +113,7 @@ function ConceptMap({ graph }) {
             return (
               <li key={n.id}>
                 {n.name}{" "}
-                <small style={{ color: "#666" }}>
-                  (p. {n.pages.join(", ")})
-                </small>
+                <small style={{ color: "#666" }}>(p. {n.pages.join(", ")})</small>
                 {needs.length > 0 && (
                   <div style={{ fontSize: "0.85rem", color: "#444" }}>
                     needs: {needs.join(", ")}
@@ -104,8 +126,7 @@ function ConceptMap({ graph }) {
       )}
       {(dropped > 0 || unresolved > 0) && (
         <p style={{ fontSize: "0.85rem", color: "#a60" }}>
-          {dropped > 0 &&
-            `${dropped} link(s) were skipped because they formed a loop. `}
+          {dropped > 0 && `${dropped} link(s) were skipped because they formed a loop. `}
           {unresolved > 0 &&
             `${unresolved} prerequisite(s) mentioned in the text don't match any concept in this chapter.`}
         </p>
@@ -120,7 +141,7 @@ export default function TeacherLibrary() {
   const [selectedChapterId, setSelectedChapterId] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
-  const [newBook, setNewBook] = useState(EMPTY_BOOK);
+  const [search, setSearch] = useState("");
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [graph, setGraph] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
@@ -136,23 +157,18 @@ export default function TeacherLibrary() {
   const myBooks = books.filter((b) => !b.is_reference);
 
   useEffect(() => {
-    loadBooks();
-  }, []);
+    const timer = setTimeout(loadBooks, search ? 250 : 0);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   // Variant suggestions for the selected book (own books only), refreshed as chapters finish.
-  const readyChapters =
-    selectedBook?.chapters?.filter((c) => c.status === "ready").length || 0;
+  const readyChapters = selectedBook?.chapters?.filter((c) => c.status === "ready").length || 0;
   useEffect(() => {
     setSuggestions([]);
-    if (!selectedBook || selectedBook.is_reference || readyChapters === 0)
-      return undefined;
+    if (!selectedBook || selectedBook.is_reference || readyChapters === 0) return undefined;
     let cancelled = false;
     fetchVariantSuggestions(selectedBook.id)
-      .then(
-        (list) =>
-          !cancelled &&
-          setSuggestions(list.filter((s) => !dismissed.includes(s.book.id))),
-      )
+      .then((list) => !cancelled && setSuggestions(list.filter((s) => !dismissed.includes(s.book.id))))
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -181,11 +197,7 @@ export default function TeacherLibrary() {
   // Load the concept map whenever a finished chapter is selected.
   useEffect(() => {
     setGraph(null);
-    if (
-      !selectedBook ||
-      !selectedChapter ||
-      selectedChapter.status !== "ready"
-    ) {
+    if (!selectedBook || !selectedChapter || selectedChapter.status !== "ready") {
       return undefined;
     }
     let cancelled = false;
@@ -206,7 +218,7 @@ export default function TeacherLibrary() {
 
   async function loadBooks() {
     try {
-      setBooks(await fetchBooks());
+      setBooks(await fetchBooks(search.trim() ? { q: search.trim() } : {}));
     } catch (err) {
       setStatusMessage(`Couldn't load books: ${err.message}`);
     }
@@ -217,23 +229,19 @@ export default function TeacherLibrary() {
     setSelectedChapterId(null);
   }
 
-  async function handleCreateBook(e) {
-    e.preventDefault();
-    try {
-      const body = {
-        ...newBook,
-        edition: newBook.edition.trim() || null,
-        school: newBook.school.trim() || null,
-      };
-      const created = await createBook(body);
-      await loadBooks();
-      setSelectedBookId(created.id);
-      setSelectedChapterId(null);
-      setNewBook(EMPTY_BOOK);
-      setStatusMessage("Book created. Add a chapter, then upload its pages.");
-    } catch (err) {
-      setStatusMessage(`Error: ${err.message}`);
-    }
+  async function handleBookCreated(created) {
+    setSearch("");
+    setBooks(await fetchBooks());
+    setSelectedBookId(created.id);
+    setSelectedChapterId(null);
+    setStatusMessage("Book created. Upload the whole textbook, or add chapters one by one.");
+  }
+
+  function handleUseExisting(book) {
+    setSearch("");
+    setSelectedBookId(book.id);
+    setSelectedChapterId(null);
+    setStatusMessage("This book is already in the library. Link it to your students below - no upload needed.");
   }
 
   async function handleCreateChapter(e) {
@@ -294,15 +302,6 @@ export default function TeacherLibrary() {
     return " - no file yet";
   };
 
-  const field = (key, placeholder, required = false) => (
-    <input
-      placeholder={placeholder}
-      value={newBook[key]}
-      onChange={(e) => setNewBook({ ...newBook, [key]: e.target.value })}
-      required={required}
-    />
-  );
-
   const bookItem = (b) => (
     <li
       key={b.id}
@@ -322,48 +321,22 @@ export default function TeacherLibrary() {
       <h2>Content Library</h2>
       {statusMessage && <p style={{ color: "blue" }}>{statusMessage}</p>}
 
-      <section
-        style={{
-          marginBottom: "2rem",
-          border: "1px solid #ccc",
-          padding: "1rem",
-        }}
-      >
-        <h3>Add your own book</h3>
-        <p style={{ fontSize: "0.85rem", color: "#666" }}>
-          Official NCERT books are already in the library below. Add a book here
-          only if it isn't listed (private publisher or school edition). It will
-          be visible only to students in your rooms.
-        </p>
-        <form
-          onSubmit={handleCreateBook}
-          style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
-        >
-          {field("board", "Board (e.g. ICSE)", true)}
-          {field("class_name", "Class (e.g. Class 9)", true)}
-          {field("subject", "Subject", true)}
-          {field("publisher", "Publisher", true)}
-          {field("edition", "Edition (optional)")}
-          {field("school", "School (optional)")}
-          <label>
-            <input
-              type="checkbox"
-              checked={newBook.is_customized}
-              onChange={(e) =>
-                setNewBook({ ...newBook, is_customized: e.target.checked })
-              }
-            />{" "}
-            School-customized edition
-          </label>
-          <button type="submit">Add Book</button>
-        </form>
-      </section>
+      <ChapterRequests refreshKey={books.length} />
+
+      <NewBookWizard onCreated={handleBookCreated} onUseExisting={handleUseExisting} />
+
+      <input
+        placeholder="Search the library (e.g. 'class 9 science ncert')"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ width: "100%", maxWidth: "28rem", marginBottom: "1rem" }}
+      />
 
       <div style={{ display: "flex", gap: "2rem" }}>
         <div style={{ width: "40%" }}>
           <h3>Official (reference) books</h3>
           {referenceBooks.length === 0 ? (
-            <p style={{ color: "#666" }}>None loaded yet.</p>
+            <p style={{ color: "#666" }}>{search ? "No official books match." : "None loaded yet."}</p>
           ) : (
             <ul>{referenceBooks.map(bookItem)}</ul>
           )}
@@ -391,6 +364,7 @@ export default function TeacherLibrary() {
                 onDismiss={(id) => setDismissed((d) => [...d, id])}
               />
             )}
+            <LinkToRoom book={selectedBook} />
             <ul>
               {selectedBook.chapters?.map((ch) => (
                 <li
@@ -398,16 +372,11 @@ export default function TeacherLibrary() {
                   onClick={() => setSelectedChapterId(ch.id)}
                   style={{
                     cursor: selectedBook.is_reference ? "default" : "pointer",
-                    fontWeight:
-                      selectedChapter?.id === ch.id ? "bold" : "normal",
+                    fontWeight: selectedChapter?.id === ch.id ? "bold" : "normal",
                   }}
                 >
                   Ch {ch.sequence_num}: {ch.title}
-                  <span
-                    style={{
-                      color: ch.status === "failed" ? "crimson" : "#666",
-                    }}
-                  >
+                  <span style={{ color: ch.status === "failed" ? "crimson" : "#666" }}>
                     {statusLabel(ch)}
                   </span>
                   {ch.status === "failed" && (
@@ -435,10 +404,9 @@ export default function TeacherLibrary() {
 
             {!selectedBook.is_reference && (
               <>
-                <form
-                  onSubmit={handleCreateChapter}
-                  style={{ marginTop: "1rem" }}
-                >
+                <WholeBookUpload book={selectedBook} onDone={loadBooks} />
+                <p style={{ marginTop: "1rem" }}>Or add a chapter at a time:</p>
+                <form onSubmit={handleCreateChapter} style={{ marginTop: "1rem" }}>
                   <input
                     placeholder="New chapter title"
                     value={newChapterTitle}
@@ -461,20 +429,14 @@ export default function TeacherLibrary() {
                       type="file"
                       accept="application/pdf,image/*"
                       onChange={handleFileUpload}
-                      disabled={
-                        uploading || selectedChapter.status === "processing"
-                      }
+                      disabled={uploading || selectedChapter.status === "processing"}
                     />
                     {selectedChapter.status === "processing" && (
-                      <p>
-                        Processing OCR & concepts... this page refreshes by
-                        itself.
-                      </p>
+                      <p>Processing OCR & concepts... this page refreshes by itself.</p>
                     )}
                     {selectedChapter.status === "ready" && (
                       <p style={{ color: "#666" }}>
-                        Uploading a different file replaces this chapter's
-                        pages.
+                        Uploading a different file replaces this chapter's pages.
                       </p>
                     )}
                   </div>

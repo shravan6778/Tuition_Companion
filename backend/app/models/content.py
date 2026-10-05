@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Integer, LargeBinary, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
 from sqlalchemy.orm import relationship
 from app.models.base import Base
@@ -32,6 +33,9 @@ class Book(Base):
     variant_of_id = Column(Uuid, ForeignKey("books.id"), nullable=True)
     is_reference = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
     owner_teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    metadata_source = Column(String(12), nullable=False, default="manual", server_default="manual")  # "front_pages" | "manual"
+    extracted_metadata = Column(JSON, nullable=True)  # what the system read from the front pages, before the teacher edited it
+    front_pages_file = Column(String, nullable=True)
 
     chapters = relationship("Chapter", back_populates="book", cascade="all, delete-orphan", order_by="Chapter.sequence_num")
     variants = relationship("Book", backref="base_book", remote_side=[id])
@@ -134,3 +138,37 @@ class ConceptEdge(Base):
 
     concept = relationship("Concept", foreign_keys=[concept_id], back_populates="edges_in")
     prerequisite = relationship("Concept", foreign_keys=[prerequisite_id], back_populates="edges_out")
+
+
+class UploadDraft(Base):
+    """A teacher's upload that waits for confirmation: front pages (-> new Book) or a whole-textbook PDF
+    (-> chapter split). Nothing heavy runs until the teacher confirms."""
+    __tablename__ = "upload_drafts"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(12), nullable=False)  # "front_pages" | "whole_book"
+    book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=True)
+    source_file = Column(String, nullable=False)
+    source_sha256 = Column(String(64), nullable=False)
+    page_count = Column(Integer, nullable=False, default=0)
+    payload = Column(JSON, nullable=True)  # extracted metadata / proposed chapter split
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ChapterRequest(Base):
+    """A student asking their teacher to add a chapter that isn't in the teacher's uploaded book yet."""
+    __tablename__ = "chapter_requests"
+    __table_args__ = (
+        CheckConstraint("status IN ('open','fulfilled','dismissed','cancelled')", name="ck_chapter_request_status"),
+    )
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    student_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)  # the book's owner
+    book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True)
+    chapter_hint = Column(String(200), nullable=False)
+    status = Column(String(10), nullable=False, default="open", server_default="open")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    resolved_at = Column(DateTime(timezone=True), nullable=True)

@@ -123,6 +123,66 @@ class VariantOfIn(BaseModel):
     base_book_id: uuid.UUID
 
 
+class BookMetadataOut(BaseModel):
+    board: Optional[str] = None
+    class_name: Optional[str] = None
+    subject: Optional[str] = None
+    publisher: Optional[str] = None
+    edition: Optional[str] = None
+    is_customized: bool = False
+    school: Optional[str] = None
+
+
+class FrontPagesDraftOut(BaseModel):
+    draft_id: uuid.UUID
+    page_count: int
+    metadata: BookMetadataOut  # what the system read; the teacher edits/confirms it
+    matches: list["BookBrief"]  # known books (official first) that already match this metadata
+
+
+class ChapterRange(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    start_page: int = Field(ge=1)
+    end_page: int = Field(ge=1)
+
+
+class WholeBookPlanOut(BaseModel):
+    draft_id: uuid.UUID
+    page_count: int
+    proposed_chapters: list[ChapterRange]  # from the PDF's bookmarks; empty if it has none
+
+
+class WholeBookConfirmIn(BaseModel):
+    draft_id: uuid.UUID
+    chapters: list[ChapterRange]
+
+
+class BulkLinkOut(BaseModel):
+    linked: int
+    already_linked: int
+    total_students: int
+
+
+class ChapterRequestCreate(BaseModel):
+    chapter_hint: str = Field(min_length=3, max_length=200)
+    chapter_id: Optional[uuid.UUID] = None
+
+
+class ChapterRequestOut(BaseModel):
+    id: uuid.UUID
+    book: "BookBrief"
+    chapter_hint: str
+    chapter_id: Optional[uuid.UUID] = None
+    status: str
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+    student_name: Optional[str] = None  # only filled in for the teacher's view
+
+
+class FulfillRequestIn(BaseModel):
+    chapter_id: Optional[uuid.UUID] = None
+
+
 class PageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
@@ -157,6 +217,7 @@ class BookCreate(BaseModel):
     is_customized: bool = False
     school: Optional[str] = None
     variant_of_id: Optional[uuid.UUID] = None
+    draft_id: Optional[uuid.UUID] = None  # front-pages draft this Book is created from (see /teacher/book-drafts)
 
 
 class BookOut(BaseModel):
@@ -171,4 +232,5 @@ class BookOut(BaseModel):
     school: Optional[str] = None
     variant_of_id: Optional[uuid.UUID] = None
     is_reference: bool = False
+    metadata_source: str = "manual"
     chapters: list[ChapterOut] = []
