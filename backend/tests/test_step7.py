@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.storage import read_file, save_by_hash, sha256_hex
 from app.db.cleanup_drafts import cleanup
 from app.db.ingest_reference import ingest, parse_ranges
-from app.models import Book, Chapter, Role, UploadDraft, User
+from app.models import Book, Chapter, Page, Role, UploadDraft, User
 from app.pipeline.orchestrator import PipelineOrchestrator
 from tests.test_book_access import make_user, new_book, new_chapter
 from tests.test_chapter_jobs import BrokenLLM, upload, use_llm
@@ -154,7 +154,7 @@ def test_parse_ranges():
 
 def test_ingest_builds_a_public_read_only_reference_book_from_bookmarks(client, session_factory):
     pdf = pdf_with_outline(TEXTS, [("Matter", 0), ("Atoms", 3)])
-    book_id, results = ingest(session_factory, pdf, **META)
+    book_id, results = ingest(session_factory, pdf, **META, allow_fake=True)
     assert results == ["ok     Matter", "ok     Atoms"]
 
     with session_factory() as db:
@@ -176,21 +176,165 @@ def test_ingest_builds_a_public_read_only_reference_book_from_bookmarks(client, 
 
 def test_ingest_with_explicit_ranges_refuses_duplicates_and_reports_failures(session_factory, monkeypatch):
     pdf = _text_pdf(*TEXTS)
-    book_id, results = ingest(session_factory, pdf, ranges=parse_ranges("All:1-6"), **META)
+    book_id, results = ingest(session_factory, pdf, ranges=parse_ranges("All:1-6"), **META, allow_fake=True)
     assert results == ["ok     All"]
     with pytest.raises(SystemExit, match="already exists"):
-        ingest(session_factory, pdf, ranges=parse_ranges("All:1-6"), **META)
+        ingest(session_factory, pdf, ranges=parse_ranges("All:1-6"), **META, allow_fake=True)
 
     use_llm(monkeypatch, BrokenLLM())
-    _, results = ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Bad:1-2"), **{**META, "edition": "other"})
+    _, results = ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Bad:1-2"), **{**META, "edition": "other"}, allow_fake=True)
     assert results[0].startswith("FAILED Bad: ") and "secret" not in results[0]
 
 
 def test_ingest_rejects_a_pdf_without_chapters_or_with_bad_ranges(session_factory):
     from fastapi import HTTPException
     with pytest.raises(HTTPException):
-        ingest(session_factory, _text_pdf(*TEXTS), **META)  # no bookmarks and no --chapters
+        ingest(session_factory, _text_pdf(*TEXTS), **META, allow_fake=True)  # no bookmarks and no --chapters
     with pytest.raises(HTTPException):
-        ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("X:1-99"), **META)
+        ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("X:1-99"), **META, allow_fake=True)
     with session_factory() as db:
         assert db.scalars(select(Book)).all() == []  # nothing created on rejection
+
+
+# ---- ingest: chapter-by-chapter into ONE reference book (NCERT ships one PDF per chapter) ---------------
+
+def chapters_of(session_factory, book_id):
+    with session_factory() as db:
+        rows = db.scalars(select(Chapter).where(Chapter.book_id == uuid.UUID(book_id)).order_by(Chapter.sequence_num)).all()
+        return [(c.sequence_num, c.title, c.status) for c in rows]
+
+
+def test_ingest_append_adds_chapters_to_the_same_reference_book(session_factory):
+    book_id, _ = ingest(session_factory, _text_pdf(*TEXTS[:3]), ranges=parse_ranges("Matter:1-3"), **META, allow_fake=True)
+    again, results = ingest(session_factory, _text_pdf(*TEXTS[3:]), ranges=parse_ranges("Atoms:1-3"), append=True, **META, allow_fake=True)
+    assert again == book_id and results == ["ok     Atoms"]
+    third, _ = ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Energy:1-6"), append=True, first_number=9, **META, allow_fake=True)
+    assert third == book_id
+    assert chapters_of(session_factory, book_id) == [(1, "Matter", "ready"), (2, "Atoms", "ready"), (9, "Energy", "ready")]
+    with session_factory() as db:
+        assert len(db.scalars(select(Book).where(Book.is_reference.is_(True))).all()) == 1
+
+
+def test_ingest_append_refuses_clashes_and_changes_nothing(session_factory):
+    book_id, _ = ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Matter:1-6"), **META, allow_fake=True)
+    with pytest.raises(SystemExit, match="--append"):
+        ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Atoms:1-6"), **META, allow_fake=True)
+    with pytest.raises(SystemExit, match="already has a chapter called 'matter'"):
+        ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("matter:1-6"), append=True, **META, allow_fake=True)
+    with pytest.raises(SystemExit, match="chapter number 1"):
+        ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Atoms:1-6"), append=True, first_number=1, **META, allow_fake=True)
+    assert chapters_of(session_factory, book_id) == [(1, "Matter", "ready")]
+
+
+def test_ingest_append_creates_the_book_when_it_does_not_exist_yet(session_factory):
+    book_id, results = ingest(session_factory, _text_pdf(*TEXTS), ranges=parse_ranges("Matter:1-6"), append=True, first_number=3, **META, allow_fake=True)
+    assert results == ["ok     Matter"] and chapters_of(session_factory, book_id) == [(3, "Matter", "ready")]
+
+
+# ---- show_graph -----------------------------------------------------------------------------------------
+
+def test_show_graph_renders_report_concepts_and_dependencies(session_factory):
+    from app.db.show_graph import render_book
+    book_id, _ = ingest(session_factory, _text_pdf("alpha idea", "beta idea", "gamma idea"), ranges=parse_ranges("Ideas:1-3"), **META, allow_fake=True)
+    with session_factory() as db:
+        text = render_book(db, uuid.UUID(book_id))
+        assert "NCERT" in text and "[official]" in text and "== Chapter 1: Ideas  [ready]" in text
+        assert "concepts=3  edges=2" in text and "llm_linking=done" in text
+        assert "- beta idea" in text and "needs: alpha idea (llm)" in text
+        assert "== Chapter 1" not in render_book(db, uuid.UUID(book_id), chapter_number=2)
+        assert render_book(db, uuid.uuid4()) == "Book not found."
+
+
+# ---- the fake LLM must never pass for real extraction -----------------------------------------------------
+
+from app.llm.fake_provider import FakeLLMProvider  # noqa: E402
+
+PAGE = " ".join(f"cell{i}" for i in range(40))
+
+
+def process(db, chapter_id, llm, pdf):
+    ch = db.get(Chapter, chapter_id)
+    PipelineOrchestrator(db, llm_provider=llm).process_chapter_file(ch, pdf, "pdf", None)
+    db.commit()
+    return ch
+
+
+def make_two_chapters(db):
+    book = Book(board="B", class_name="9", subject="S", publisher="P", is_reference=True)
+    db.add(book)
+    db.flush()
+    chapters = [Chapter(book_id=book.id, title=f"C{i}", sequence_num=i) for i in (1, 2)]
+    db.add_all(chapters)
+    db.commit()
+    return [c.id for c in chapters]
+
+
+def test_graph_report_and_pages_record_which_model_made_the_concepts(session_factory):
+    with session_factory() as db:
+        [c1, _] = make_two_chapters(db)
+        ch = process(db, c1, FakeLLMProvider(), _text_pdf(PAGE))
+        assert ch.graph_report["model"] == "fake" and {p.concepts_model for p in ch.pages} == {"fake"}
+
+
+def test_placeholder_concepts_are_never_reused_by_a_real_model(session_factory):
+    pdf = _text_pdf(PAGE)
+    with session_factory() as db:
+        [c1, c2] = make_two_chapters(db)
+        process(db, c1, FakeLLMProvider(), pdf)
+        real = CountingLLM()
+        ch2 = process(db, c2, real, pdf)
+        assert real.calls == 1  # extracted for real instead of copying the placeholder
+        assert [c.name for p in ch2.pages for c in p.concepts] == ["Matter"] and ch2.pages[0].concepts_model == "counting"
+
+
+def test_real_concepts_are_still_reused_and_fake_reuses_fake_but_unknown_origin_is_not_trusted(session_factory):
+    pdf = _text_pdf(PAGE)
+    with session_factory() as db:
+        [c1, c2] = make_two_chapters(db)
+        real = CountingLLM()
+        process(db, c1, real, pdf)
+        process(db, c2, real, pdf)
+        assert real.calls == 1  # second chapter reused the real concepts
+    with session_factory() as db:
+        [c1, c2] = make_two_chapters(db)
+        fake_a, fake_b = FakeLLMProvider(), FakeLLMProvider()
+        process(db, c1, fake_a, pdf)
+        ch = process(db, c2, fake_b, pdf)
+        assert ch.match_report["pages_reused"] == 1  # placeholder -> placeholder is fine in tests
+    with session_factory() as db:
+        [c1, c2] = make_two_chapters(db)
+        process(db, c1, CountingLLM(), pdf)
+        for page in db.scalars(select(Page)):
+            page.concepts_model = None  # pages from before models were recorded
+        db.commit()
+        llm = CountingLLM()
+        process(db, c2, llm, pdf)
+        assert llm.calls == 1  # origin unknown: not reused
+
+
+def test_ingest_and_reprocess_refuse_the_fake_llm_unless_told_otherwise(session_factory, monkeypatch):
+    from app.db.reprocess import reprocess
+    pdf = _text_pdf(*TEXTS)
+    with pytest.raises(SystemExit, match="PLACEHOLDER"):
+        ingest(session_factory, pdf, ranges=parse_ranges("All:1-6"), **META)
+    with session_factory() as db:
+        assert db.scalars(select(Book)).all() == []
+    book_id, _ = ingest(session_factory, pdf, ranges=parse_ranges("All:1-6"), **META, allow_fake=True)
+    with pytest.raises(SystemExit, match="PLACEHOLDER"):
+        reprocess(session_factory, uuid.UUID(book_id))
+
+
+def test_reprocess_replaces_placeholder_concepts_with_real_ones_from_the_stored_file(session_factory, monkeypatch):
+    from app.db.reprocess import reprocess
+    from app.db.show_graph import render_book
+    book_id, _ = ingest(session_factory, _text_pdf("alpha idea", "beta idea"), ranges=parse_ranges("Ideas:1-2"), **META, allow_fake=True)
+    with session_factory() as db:
+        assert "PLACEHOLDER" in render_book(db, uuid.UUID(book_id)) and "model=fake" in render_book(db, uuid.UUID(book_id))
+
+    monkeypatch.setattr(settings, "llm_provider", "openai_compat")  # what fixing .env does
+    monkeypatch.setattr("app.pipeline.orchestrator.get_llm_provider", lambda: CountingLLM())
+    assert reprocess(session_factory, uuid.UUID(book_id)) == ["ok     Ideas"]
+    with session_factory() as db:
+        text = render_book(db, uuid.UUID(book_id))
+        assert "PLACEHOLDER" not in text and "model=counting" in text and "- Matter" in text and "alpha idea" not in text
+        assert reprocess(session_factory, uuid.UUID(book_id), chapter_number=7) == []  # no such chapter: nothing to do

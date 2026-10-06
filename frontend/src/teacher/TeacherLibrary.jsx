@@ -11,6 +11,7 @@ import {
   retryChapter,
   fetchChapterGraph,
   fetchVariantSuggestions,
+  fetchChapterMatches,
   confirmVariant,
   clearVariant,
 } from "../api/content";
@@ -24,11 +25,7 @@ function LinkToRoom({ book }) {
   useEffect(() => {
     api
       .get("/teacher/rooms")
-      .then((res) =>
-        setRooms(
-          (res.data || []).filter((r) => r.room_type === "single_class"),
-        ),
-      )
+      .then((res) => setRooms((res.data || []).filter((r) => r.room_type === "single_class")))
       .catch(() => {});
   }, []);
 
@@ -54,31 +51,18 @@ function LinkToRoom({ book }) {
       <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
         <option value="">Link this book to all students in...</option>
         {rooms.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name} ({r.member_count} students)
-          </option>
+          <option key={r.id} value={r.id}>{r.name} ({r.member_count} students)</option>
         ))}
       </select>{" "}
-      <button type="button" disabled={!roomId} onClick={link}>
-        Link
-      </button>{" "}
+      <button type="button" disabled={!roomId} onClick={link}>Link</button>{" "}
       <span style={{ color: "#444" }}>{note}</span>
     </p>
   );
 }
 
-function VariantBanner({
-  book,
-  books,
-  suggestions,
-  onConfirm,
-  onClear,
-  onDismiss,
-}) {
-  const base =
-    book.variant_of_id && books.find((b) => b.id === book.variant_of_id);
-  const label = (b) =>
-    `${b.board} ${b.class_name} ${b.subject} (${b.publisher}${b.edition ? `, ${b.edition}` : ""})`;
+function VariantBanner({ book, books, suggestions, onConfirm, onClear, onDismiss }) {
+  const base = book.variant_of_id && books.find((b) => b.id === book.variant_of_id);
+  const label = (b) => `${b.board} ${b.class_name} ${b.subject} (${b.publisher}${b.edition ? `, ${b.edition}` : ""})`;
   if (base) {
     return (
       <p style={{ background: "#eef6ff", padding: "0.5rem" }}>
@@ -89,28 +73,27 @@ function VariantBanner({
   }
   const s = suggestions[0];
   if (!s) return null;
-  const percent = Math.round(s.coverage * 100);
+  const of = `${s.matched_chapters} of your ${s.chapters_checked} chapter${s.chapters_checked === 1 ? "" : "s"}`;
+  const partial =
+    s.book.is_reference && s.candidate_chapters_loaded < 40
+      ? ` (the official book has ${s.candidate_chapters_loaded} chapter${s.candidate_chapters_loaded === 1 ? "" : "s"} loaded so far)`
+      : "";
   return (
-    <div
-      style={{ background: "#fff8e6", padding: "0.5rem", marginBottom: "1rem" }}
-    >
+    <div style={{ background: "#fff8e6", padding: "0.5rem", marginBottom: "1rem" }}>
       {s.kind === "same" ? (
         <p>
-          {percent}% of your pages are nearly identical to{" "}
+          {of} {s.matched_chapters === 1 && s.chapters_checked > 1 ? "is" : "are"} identical to chapters of{" "}
           <b>{label(s.book)}</b>
-          {s.book.is_reference ? " (official)" : ""}. Students can link that
-          book directly; you may not need your own copy.
+          {s.book.is_reference ? " (official)" : ""}{partial}. Students can use that book for those chapters.
+          Is your book the same book?
         </p>
       ) : (
         <p>
-          {percent}% of your pages match <b>{label(s.book)}</b>
-          {s.book.is_reference ? " (official)" : ""}, with edits. Is this a
-          customized version of it?
+          {of} match chapters of <b>{label(s.book)}</b>
+          {s.book.is_reference ? " (official)" : ""}{partial}, with edits. Is this a customized version of it?
         </p>
       )}
-      <button onClick={() => onConfirm(s.book.id)}>
-        Yes, it's a variant of it
-      </button>{" "}
+      <button onClick={() => onConfirm(s.book.id)}>Yes, it's based on it</button>{" "}
       <button onClick={() => onDismiss(s.book.id)}>Not now</button>
     </div>
   );
@@ -122,9 +105,16 @@ function ConceptMap({ graph }) {
   const dropped = report.dropped_cycle_edges?.length || 0;
   const unresolved = report.unresolved_prerequisites?.length || 0;
   const review = report.review_pages || [];
+  const placeholder = report.model === "fake";
   return (
     <div style={{ marginTop: "1rem" }}>
       <h4>Concept map ({graph.nodes.length} concepts)</h4>
+      {placeholder && (
+        <p style={{ color: "crimson", fontWeight: "bold" }}>
+          These are PLACEHOLDER concepts from the fake test model, not real extraction. Set LLM_PROVIDER in
+          backend/.env, then run python -m app.db.reprocess for this book.
+        </p>
+      )}
       {graph.nodes.length === 0 ? (
         <p style={{ color: "#666" }}>No concepts were found in this chapter.</p>
       ) : (
@@ -136,9 +126,7 @@ function ConceptMap({ graph }) {
             return (
               <li key={n.id}>
                 {n.name}{" "}
-                <small style={{ color: "#666" }}>
-                  (p. {n.pages.join(", ")})
-                </small>
+                <small style={{ color: "#666" }}>(p. {n.pages.join(", ")})</small>
                 {needs.length > 0 && (
                   <div style={{ fontSize: "0.85rem", color: "#444" }}>
                     needs: {needs.join(", ")}
@@ -151,16 +139,14 @@ function ConceptMap({ graph }) {
       )}
       {review.length > 0 && (
         <p style={{ fontSize: "0.85rem", color: "crimson" }}>
-          {review.length === 1 ? "1 page looks" : `${review.length} pages look`}{" "}
-          incomplete (page {review.map((r) => r.page).join(", ")}): the text was
-          long but no concepts were found. A clearer scan may help - upload the
-          chapter again.
+          {review.length === 1 ? "1 page looks" : `${review.length} pages look`} incomplete (page{" "}
+          {review.map((r) => r.page).join(", ")}): the text was long but no concepts were found. A clearer
+          scan may help - upload the chapter again.
         </p>
       )}
       {(dropped > 0 || unresolved > 0) && (
         <p style={{ fontSize: "0.85rem", color: "#a60" }}>
-          {dropped > 0 &&
-            `${dropped} link(s) were skipped because they formed a loop. `}
+          {dropped > 0 && `${dropped} link(s) were skipped because they formed a loop. `}
           {unresolved > 0 &&
             `${unresolved} prerequisite(s) mentioned in the text don't match any concept in this chapter.`}
         </p>
@@ -179,6 +165,7 @@ export default function TeacherLibrary() {
   const [newChapterTitle, setNewChapterTitle] = useState("");
   const [graph, setGraph] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
+  const [chapterMatches, setChapterMatches] = useState({}); // my chapter id -> matches in other books
   const [dismissed, setDismissed] = useState([]); // base book ids hidden for this session
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
@@ -196,19 +183,17 @@ export default function TeacherLibrary() {
   }, [search]);
 
   // Variant suggestions for the selected book (own books only), refreshed as chapters finish.
-  const readyChapters =
-    selectedBook?.chapters?.filter((c) => c.status === "ready").length || 0;
+  const readyChapters = selectedBook?.chapters?.filter((c) => c.status === "ready").length || 0;
   useEffect(() => {
     setSuggestions([]);
-    if (!selectedBook || selectedBook.is_reference || readyChapters === 0)
-      return undefined;
+    setChapterMatches({});
+    if (!selectedBook || selectedBook.is_reference || readyChapters === 0) return undefined;
     let cancelled = false;
+    fetchChapterMatches(selectedBook.id)
+      .then((list) => !cancelled && setChapterMatches(Object.fromEntries(list.map((c) => [c.chapter_id, c.matches]))))
+      .catch(() => {});
     fetchVariantSuggestions(selectedBook.id)
-      .then(
-        (list) =>
-          !cancelled &&
-          setSuggestions(list.filter((s) => !dismissed.includes(s.book.id))),
-      )
+      .then((list) => !cancelled && setSuggestions(list.filter((s) => !dismissed.includes(s.book.id))))
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -237,11 +222,7 @@ export default function TeacherLibrary() {
   // Load the concept map whenever a finished chapter is selected.
   useEffect(() => {
     setGraph(null);
-    if (
-      !selectedBook ||
-      !selectedChapter ||
-      selectedChapter.status !== "ready"
-    ) {
+    if (!selectedBook || !selectedChapter || selectedChapter.status !== "ready") {
       return undefined;
     }
     let cancelled = false;
@@ -278,18 +259,14 @@ export default function TeacherLibrary() {
     setBooks(await fetchBooks());
     setSelectedBookId(created.id);
     setSelectedChapterId(null);
-    setStatusMessage(
-      "Book created. Upload the whole textbook, or add chapters one by one.",
-    );
+    setStatusMessage("Book created. Upload the whole textbook, or add chapters one by one.");
   }
 
   function handleUseExisting(book) {
     setSearch("");
     setSelectedBookId(book.id);
     setSelectedChapterId(null);
-    setStatusMessage(
-      "This book is already in the library. Link it to your students below - no upload needed.",
-    );
+    setStatusMessage("This book is already in the library. Link it to your students below - no upload needed.");
   }
 
   async function handleCreateChapter(e) {
@@ -371,10 +348,7 @@ export default function TeacherLibrary() {
 
       <ChapterRequests refreshKey={books.length} />
 
-      <NewBookWizard
-        onCreated={handleBookCreated}
-        onUseExisting={handleUseExisting}
-      />
+      <NewBookWizard onCreated={handleBookCreated} onUseExisting={handleUseExisting} />
 
       <input
         placeholder="Search the library (e.g. 'class 9 science ncert')"
@@ -387,9 +361,7 @@ export default function TeacherLibrary() {
         <div style={{ width: "40%" }}>
           <h3>Official (reference) books</h3>
           {referenceBooks.length === 0 ? (
-            <p style={{ color: "#666" }}>
-              {search ? "No official books match." : "None loaded yet."}
-            </p>
+            <p style={{ color: "#666" }}>{search ? "No official books match." : "None loaded yet."}</p>
           ) : (
             <ul>{referenceBooks.map(bookItem)}</ul>
           )}
@@ -425,18 +397,20 @@ export default function TeacherLibrary() {
                   onClick={() => setSelectedChapterId(ch.id)}
                   style={{
                     cursor: selectedBook.is_reference ? "default" : "pointer",
-                    fontWeight:
-                      selectedChapter?.id === ch.id ? "bold" : "normal",
+                    fontWeight: selectedChapter?.id === ch.id ? "bold" : "normal",
                   }}
                 >
                   Ch {ch.sequence_num}: {ch.title}
-                  <span
-                    style={{
-                      color: ch.status === "failed" ? "crimson" : "#666",
-                    }}
-                  >
+                  <span style={{ color: ch.status === "failed" ? "crimson" : "#666" }}>
                     {statusLabel(ch)}
                   </span>
+                  {(chapterMatches[ch.id] || []).slice(0, 1).map((m) => (
+                    <div key={m.book.id} style={{ fontSize: "0.85rem", color: "#245" }}>
+                      {m.kind === "same" ? "Identical to" : "An edition of"}{" "}
+                      {m.chapter_title ? `"${m.chapter_title}"` : "a chapter"} in {m.book.class_name}{" "}
+                      {m.book.subject} ({m.book.publisher}){m.book.is_reference ? ", official" : ""}
+                    </div>
+                  ))}
                   {ch.status === "failed" && (
                     <>
                       <div style={{ color: "crimson", fontSize: "0.85rem" }}>
@@ -464,10 +438,7 @@ export default function TeacherLibrary() {
               <>
                 <WholeBookUpload book={selectedBook} onDone={loadBooks} />
                 <p style={{ marginTop: "1rem" }}>Or add a chapter at a time:</p>
-                <form
-                  onSubmit={handleCreateChapter}
-                  style={{ marginTop: "1rem" }}
-                >
+                <form onSubmit={handleCreateChapter} style={{ marginTop: "1rem" }}>
                   <input
                     placeholder="New chapter title"
                     value={newChapterTitle}
@@ -490,20 +461,14 @@ export default function TeacherLibrary() {
                       type="file"
                       accept="application/pdf,image/*"
                       onChange={handleFileUpload}
-                      disabled={
-                        uploading || selectedChapter.status === "processing"
-                      }
+                      disabled={uploading || selectedChapter.status === "processing"}
                     />
                     {selectedChapter.status === "processing" && (
-                      <p>
-                        Processing OCR & concepts... this page refreshes by
-                        itself.
-                      </p>
+                      <p>Processing OCR & concepts... this page refreshes by itself.</p>
                     )}
                     {selectedChapter.status === "ready" && (
                       <p style={{ color: "#666" }}>
-                        Uploading a different file replaces this chapter's
-                        pages.
+                        Uploading a different file replaces this chapter's pages.
                       </p>
                     )}
                   </div>

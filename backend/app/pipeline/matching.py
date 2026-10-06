@@ -27,6 +27,8 @@ class PageMatch:
     book_id: uuid.UUID
     is_reference: bool
     owner_teacher_id: Optional[uuid.UUID]
+    chapter_id: Optional[uuid.UUID] = None
+    chapter_title: Optional[str] = None
 
 
 def find_matches(db: Session, signature: bytes, keys: Iterable[int]) -> list[PageMatch]:
@@ -42,47 +44,54 @@ def find_matches(db: Session, signature: bytes, keys: Iterable[int]) -> list[Pag
     if not shared:
         return []
     rows = db.execute(
-        select(Page.id, Page.fingerprint, Book.id, Book.is_reference, Book.owner_teacher_id)
+        select(Page.id, Page.fingerprint, Book.id, Book.is_reference, Book.owner_teacher_id, Chapter.id, Chapter.title)
         .join(Chapter, Chapter.id == Page.chapter_id)
         .join(Book, Book.id == Chapter.book_id)
         .where(Page.id.in_([r.page_id for r in shared]))
     ).all()
     matches = []
-    for page_id, fingerprint, book_id, is_reference, owner_id in rows:
+    for page_id, fingerprint, book_id, is_reference, owner_id, chapter_id, chapter_title in rows:
         score = compute_jaccard_similarity(signature, fingerprint)
         if score >= settings.variant_min_similarity:
-            matches.append(PageMatch(page_id, score, book_id, is_reference, owner_id))
+            matches.append(PageMatch(page_id, score, book_id, is_reference, owner_id, chapter_id, chapter_title))
     return sorted(matches, key=lambda m: m.score, reverse=True)
 
 
 def summarize_book_matches(
     per_page: list[list[PageMatch]], pages_checked: int, own_book_id: uuid.UUID, teacher_id: uuid.UUID
 ) -> list[dict]:
-    """Book-level suggestions for one chapter: books (visible to the teacher, other than this one) that at least
-    variant_min_coverage of the chapter's fingerprinted pages match. kind='same' if the matched pages are
-    near-identical, else 'variant'."""
+    """Matches for ONE chapter: books (visible to the teacher, other than this one) with at least
+    variant_min_coverage of the chapter's fingerprinted pages matching, each with the chapter of that book
+    that matches best. kind='same' if the matched pages are near-identical, else 'variant'."""
     if pages_checked == 0:
         return []
-    best: dict[uuid.UUID, list[float]] = defaultdict(list)  # book -> best score for each page that matched it
+    best: dict[uuid.UUID, list[PageMatch]] = defaultdict(list)  # book -> best match for each page that matched it
     for matches in per_page:
-        page_best: dict[uuid.UUID, float] = {}
+        page_best: dict[uuid.UUID, PageMatch] = {}
         for m in matches:
             visible = m.is_reference or m.owner_teacher_id == teacher_id
-            if visible and m.book_id != own_book_id:
-                page_best[m.book_id] = max(page_best.get(m.book_id, 0.0), m.score)
-        for book_id, score in page_best.items():
-            best[book_id].append(score)
+            if visible and m.book_id != own_book_id and (m.book_id not in page_best or m.score > page_best[m.book_id].score):
+                page_best[m.book_id] = m
+        for book_id, m in page_best.items():
+            best[book_id].append(m)
 
     suggestions = []
-    for book_id, scores in best.items():
-        coverage = len(scores) / pages_checked
+    for book_id, found in best.items():
+        coverage = len(found) / pages_checked
         if coverage < settings.variant_min_coverage:
             continue
-        average = sum(scores) / len(scores)
+        average = sum(m.score for m in found) / len(found)
+        chapters: dict = defaultdict(lambda: [0, None])  # which chapter of that book do the matched pages sit in?
+        for m in found:
+            chapters[m.chapter_id][0] += 1
+            chapters[m.chapter_id][1] = m.chapter_title
+        top_id, (_, top_title) = max(chapters.items(), key=lambda kv: kv[1][0])
         suggestions.append({
             "book_id": str(book_id),
+            "chapter_id": str(top_id) if top_id else None,
+            "chapter_title": top_title,
             "kind": "same" if average >= settings.reuse_similarity else "variant",
-            "matched_pages": len(scores),
+            "matched_pages": len(found),
             "pages_checked": pages_checked,
             "avg_similarity": round(average, 3),
         })

@@ -220,18 +220,72 @@ def test_unrelated_or_barely_overlapping_uploads_get_no_suggestion(client, sessi
     assert suggestions(client, th, book["id"]) == []  # only 1 of 4 pages matches: coverage 0.25 < 0.5
 
 
-def test_suggestions_pool_across_chapters_of_the_book(client, session_factory):
+def test_suggestions_are_judged_chapter_by_chapter(client, session_factory):
     ref_id = processed_reference_book(session_factory, [page_text("s1_"), page_text("s2_"), page_text("s3_"), page_text("s4_")])
     _, th = make_user(session_factory, Role.teacher, "teachera")
     book = new_book(client, th)
     ch1 = new_chapter(client, th, book["id"])
     upload(client, th, book["id"], ch1, _text_pdf(page_text("s1_", alter_every=25), page_text("x1_")))
     [first] = suggestions(client, th, book["id"])
-    assert first["matched_pages"] == 1 and first["pages_checked"] == 2 and first["coverage"] == 0.5
+    assert (first["matched_chapters"], first["chapters_checked"]) == (1, 1) and first["matched_pages"] == 1 and first["pages_checked"] == 2
     ch2 = client.post(f"/teacher/books/{book['id']}/chapters", json={"title": "C2", "sequence_num": 2}, headers=th).json()["id"]
     upload(client, th, book["id"], ch2, _text_pdf(page_text("s2_", alter_every=25), page_text("s3_", alter_every=25)))
     [s] = suggestions(client, th, book["id"])
-    assert s["book"]["id"] == ref_id and s["matched_pages"] == 3 and s["pages_checked"] == 4
+    assert s["book"]["id"] == ref_id and (s["matched_chapters"], s["chapters_checked"], s["coverage"]) == (2, 2, 1.0)
+    assert s["matched_pages"] == 3 and s["pages_checked"] == 4
+
+
+def chapter_matches(client, headers, book_id):
+    res = client.get(f"/teacher/books/{book_id}/chapter-matches", headers=headers)
+    assert res.status_code == 200, res.text
+    return {c["chapter_title"]: c["matches"] for c in res.json()}
+
+
+def test_a_partly_loaded_official_book_is_matched_by_chapter_not_by_page_count(client, session_factory):
+    """The real-world case: the official book has only ONE chapter loaded so far, and the teacher's book has
+    that chapter plus another. Counting pages over the whole book gave a confusing 25%; by chapter it is
+    'your chapter 2 IS the official chapter', and the other chapter simply has no match yet."""
+    ref_id = processed_reference_book(session_factory, [page_text("b1_"), page_text("b2_")])
+    _, th = make_user(session_factory, Role.teacher, "teachera")
+    book = new_book(client, th)
+    c1 = new_chapter(client, th, book["id"])
+    upload(client, th, book["id"], c1, _text_pdf(*[page_text(f"other{i}_") for i in range(6)]))  # long, unrelated
+    c2 = client.post(f"/teacher/books/{book['id']}/chapters", json={"title": "The Building Block of Life", "sequence_num": 2}, headers=th).json()["id"]
+    upload(client, th, book["id"], c2, _text_pdf(page_text("b1_"), page_text("b2_")))
+
+    by_chapter = chapter_matches(client, th, book["id"])
+    assert by_chapter["Ch 1"] == []
+    [m] = by_chapter["The Building Block of Life"]
+    assert m["book"]["id"] == ref_id and m["kind"] == "same" and m["chapter_title"] == "Ref ch"
+    assert (m["matched_pages"], m["pages_checked"]) == (2, 2)  # judged within the chapter, not out of 8
+
+    [s] = suggestions(client, th, book["id"])
+    assert (s["matched_chapters"], s["chapters_checked"], s["coverage"]) == (1, 2, 0.5)
+    assert s["candidate_chapters_loaded"] == 1 and s["kind"] == "same"
+    assert (s["matched_pages"], s["pages_checked"]) == (2, 8)  # page totals stay available, but are not the criterion
+
+
+def test_chapter_matches_survive_confirming_the_variant_and_respect_privacy(client, session_factory):
+    ref_id = processed_reference_book(session_factory, [page_text("c1_"), page_text("c2_")])
+    _, ah = make_user(session_factory, Role.teacher, "teachera")
+    _, bh = make_user(session_factory, Role.teacher, "teacherb")
+    a_book = new_book(client, ah)
+    a_ch = new_chapter(client, ah, a_book["id"])
+    upload(client, ah, a_book["id"], a_ch, _text_pdf(page_text("c1_"), page_text("c2_")))
+    b_book = new_book(client, bh)
+    b_ch = new_chapter(client, bh, b_book["id"])
+    upload(client, bh, b_book["id"], b_ch, _text_pdf(page_text("c1_", alter_every=25), page_text("c2_", alter_every=25)))
+
+    client.post(f"/teacher/books/{a_book['id']}/variant-of", json={"base_book_id": ref_id}, headers=ah)
+    assert suggestions(client, ah, a_book["id"]) == []  # already confirmed...
+    assert [m["book"]["id"] for m in chapter_matches(client, ah, a_book["id"])["Ch 1"]] == [ref_id]  # ...but still shown per chapter
+
+    # B sees the official chapter, never A's private book, though A's pages match B's too
+    assert [m["book"]["id"] for m in chapter_matches(client, bh, b_book["id"])["Ch 1"]] == [ref_id]
+    assert a_book["id"] not in client.get(f"/teacher/books/{b_book['id']}/chapter-matches", headers=bh).text
+
+    assert client.get(f"/teacher/books/{a_book['id']}/chapter-matches", headers=bh).status_code == 404
+    assert client.get(f"/teacher/books/{ref_id}/chapter-matches", headers=ah).status_code == 403
 
 
 def test_other_teachers_private_books_are_never_suggested(client, session_factory):
@@ -308,3 +362,22 @@ def test_variant_endpoints_enforce_access_and_reject_bad_links(client, session_f
     assert client.post(url(a1["id"]), json={"base_book_id": a2["id"]}, headers=ah).status_code == 200
     assert client.post(url(a2["id"]), json={"base_book_id": a1["id"]}, headers=ah).status_code == 409  # would be a loop
     assert client.post(url(a2["id"]), json={"base_book_id": ref_id}, headers=ah).status_code == 200
+
+
+def test_a_stale_or_tampered_report_can_never_expose_a_private_book(client, session_factory):
+    """Visibility is re-checked when matches are READ, so even a stored report that wrongly names someone else's
+    private book (old data, a bug) cannot leak it."""
+    _, ah = make_user(session_factory, Role.teacher, "teachera")
+    _, bh = make_user(session_factory, Role.teacher, "teacherb")
+    b_book = new_book(client, bh, subject="Secret")
+    a_book = new_book(client, ah)
+    a_ch = new_chapter(client, ah, a_book["id"])
+    upload(client, ah, a_book["id"], a_ch, _text_pdf(page_text("t1_"), page_text("t2_")))
+    with session_factory() as db:
+        chapter = db.get(Chapter, uuid.UUID(a_ch))
+        chapter.match_report = {"pages_checked": 2, "suggestions": [{
+            "book_id": b_book["id"], "chapter_id": None, "chapter_title": "leak?", "kind": "same",
+            "matched_pages": 2, "pages_checked": 2, "avg_similarity": 1.0}]}
+        db.commit()
+    assert b_book["id"] not in client.get(f"/teacher/books/{a_book['id']}/chapter-matches", headers=ah).text
+    assert suggestions(client, ah, a_book["id"]) == []

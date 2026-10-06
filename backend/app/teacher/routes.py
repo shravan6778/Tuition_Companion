@@ -2,7 +2,7 @@ import uuid
 from typing import Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
@@ -16,7 +16,7 @@ from app.db.session import get_db, get_session_factory
 from app.models.content import Book, Chapter, ChapterStatus, Page, student_book
 from app.models.room import RoomMember, RoomType
 from app.pipeline.jobs import is_actively_processing, mark_processing, run_chapter_job
-from app.schemas import BulkLinkOut, BookBrief, BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, VariantOfIn, VariantSuggestionOut, MemberOut, PageOut, RoomCreate, RoomOut
+from app.schemas import BulkLinkOut, ChapterMatchesOut, ChapterMatchOut, BookBrief, BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, VariantOfIn, VariantSuggestionOut, MemberOut, PageOut, RoomCreate, RoomOut
 from app.teacher import rooms as svc
 
 router = APIRouter(prefix="/teacher", tags=["teacher"], dependencies=[Depends(require_teacher)])
@@ -229,40 +229,79 @@ def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depends
 
 # ---- variants: "this looks like an edition of book X" ---------------------------------------
 
+def _chapter_matches(db: Session, teacher, book: Book) -> list[ChapterMatchesOut]:
+    """Per finished chapter of this book: which chapters of OTHER books (official, or the teacher's own) it
+    matches. Visibility is re-checked now, because the stored report may be old."""
+    chapters = db.scalars(
+        select(Chapter).where(Chapter.book_id == book.id, Chapter.status == ChapterStatus.READY).order_by(Chapter.sequence_num)
+    ).all()
+    visible: dict[str, Book | None] = {}
+    out = []
+    for chapter in chapters:
+        matches = []
+        for s in (chapter.match_report or {}).get("suggestions", []):
+            if s["book_id"] not in visible:
+                try:
+                    visible[s["book_id"]] = access.get_book_visible_to_teacher(db, teacher, uuid.UUID(s["book_id"]))
+                except HTTPException:
+                    visible[s["book_id"]] = None
+            base = visible[s["book_id"]]
+            if base is None:
+                continue
+            matches.append(ChapterMatchOut(
+                book=BookBrief.model_validate(base),
+                chapter_id=uuid.UUID(s["chapter_id"]) if s.get("chapter_id") else None,
+                chapter_title=s.get("chapter_title"),
+                kind=s["kind"], matched_pages=s["matched_pages"], pages_checked=s["pages_checked"],
+                avg_similarity=s["avg_similarity"],
+            ))
+        out.append(ChapterMatchesOut(chapter_id=chapter.id, chapter_title=chapter.title, matches=matches))
+    return out
+
+
+@router.get("/books/{book_id}/chapter-matches", response_model=list[ChapterMatchesOut])
+def chapter_matches(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Chapter by chapter: 'your chapter X is identical to / an edition of chapter Y in book Z'.
+    Never includes other teachers' private books."""
+    return _chapter_matches(db, teacher, access.get_owned_book(db, teacher, book_id))
+
+
 @router.get("/books/{book_id}/variant-suggestions", response_model=list[VariantSuggestionOut])
 def variant_suggestions(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
-    """Books (official, or your own) whose pages match what you've uploaded into this book, pooled over all
-    its finished chapters. Never includes other teachers' private books."""
+    """Books that look like the base of this one, judged CHAPTER by chapter: a book is suggested when at least
+    half of your finished chapters each match a chapter of it. (Counting pages across the whole book would let
+    one long chapter swamp the result, and a partly loaded official book would look like a poor match.)"""
     book = access.get_owned_book(db, teacher, book_id)
-    chapters = db.scalars(
-        select(Chapter).where(Chapter.book_id == book.id, Chapter.status == ChapterStatus.READY)
-    ).all()
-    pages_checked = sum((c.match_report or {}).get("pages_checked", 0) for c in chapters)
-    if pages_checked == 0:
+    per_chapter = [c for c in _chapter_matches(db, teacher, book)]
+    checked = [
+        c for c in per_chapter
+        if (db.get(Chapter, c.chapter_id).match_report or {}).get("pages_checked", 0) > 0
+    ]
+    if not checked:
         return []
 
-    pooled: dict[str, dict] = {}
-    for chapter in chapters:
-        for s in (chapter.match_report or {}).get("suggestions", []):
-            agg = pooled.setdefault(s["book_id"], {"matched": 0, "sim_sum": 0.0})
-            agg["matched"] += s["matched_pages"]
-            agg["sim_sum"] += s["avg_similarity"] * s["matched_pages"]
+    pooled: dict[uuid.UUID, dict] = {}
+    for chapter in checked:
+        for m in chapter.matches:
+            agg = pooled.setdefault(m.book.id, {"book": m.book, "chapters": 0, "pages": 0, "sim_sum": 0.0, "checked": 0})
+            agg["chapters"] += 1
+            agg["pages"] += m.matched_pages
+            agg["sim_sum"] += m.avg_similarity * m.matched_pages
+    pages_total = sum((db.get(Chapter, c.chapter_id).match_report or {}).get("pages_checked", 0) for c in checked)
 
     out = []
     for base_id, agg in pooled.items():
-        coverage = agg["matched"] / pages_checked
-        if coverage < settings.variant_min_coverage or uuid.UUID(base_id) == book.variant_of_id:
+        coverage = agg["chapters"] / len(checked)
+        if coverage < settings.variant_min_coverage or base_id == book.variant_of_id:
             continue
-        try:  # re-check visibility now: the report is old, the book may have been deleted or changed
-            base = access.get_book_visible_to_teacher(db, teacher, uuid.UUID(base_id))
-        except HTTPException:
-            continue
-        avg = agg["sim_sum"] / agg["matched"]
+        avg = agg["sim_sum"] / agg["pages"]
+        loaded = db.scalar(select(func.count()).select_from(Chapter).where(
+            Chapter.book_id == base_id, Chapter.status == ChapterStatus.READY)) or 0
         out.append(VariantSuggestionOut(
-            book=BookBrief.model_validate(base),
-            kind="same" if avg >= settings.reuse_similarity else "variant",
-            coverage=round(min(coverage, 1.0), 3), avg_similarity=round(avg, 3),
-            matched_pages=agg["matched"], pages_checked=pages_checked,
+            book=agg["book"], kind="same" if avg >= settings.reuse_similarity else "variant",
+            coverage=round(coverage, 3), matched_chapters=agg["chapters"], chapters_checked=len(checked),
+            candidate_chapters_loaded=loaded, avg_similarity=round(avg, 3),
+            matched_pages=agg["pages"], pages_checked=pages_total,
         ))
     return sorted(out, key=lambda v: (v.coverage, v.avg_similarity), reverse=True)[:3]
 

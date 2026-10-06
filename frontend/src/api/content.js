@@ -92,6 +92,11 @@ export async function fulfillRequest(requestId, chapterId = null) {
   });
 }
 
+// Per chapter: "your chapter X is identical to / an edition of chapter Y in book Z".
+export async function fetchChapterMatches(bookId) {
+  return request(`/teacher/books/${bookId}/chapter-matches`);
+}
+
 // "This looks like an edition of book X": suggestions, confirm, clear.
 export async function fetchVariantSuggestions(bookId) {
   return request(`/teacher/books/${bookId}/variant-suggestions`);

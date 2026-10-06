@@ -42,6 +42,16 @@ class PipelineOrchestrator:
             self._ocr = get_ocr_provider()
         return self._ocr
 
+    @property
+    def model_name(self) -> str:
+        return getattr(self.llm, "model_name", "unknown")
+
+    def _reusable(self, source_page: Page) -> bool:
+        """Concepts are reused only if we know which model made them, and never the fake model's placeholders
+        for a real run (otherwise one dev run with LLM_PROVIDER=fake would poison every later upload)."""
+        made_by = source_page.concepts_model
+        return made_by is not None and (made_by != "fake" or self.model_name == "fake")
+
     def _cached_layout(self, chapter: Chapter):
         """Layer 0: the same file (by SHA-256) already processed into another chapter -> its page text."""
         if not chapter.source_sha256:
@@ -87,6 +97,10 @@ class PipelineOrchestrator:
                 matches = find_matches(self.db, signature, band_keys(signature))
                 per_page_matches.append(matches)
             best = matches[0] if matches and matches[0].score >= settings.reuse_similarity else None
+            source_page = self.db.get(Page, best.page_id) if best else None
+            if source_page is not None and not self._reusable(source_page):
+                logger.info("Not reusing concepts of page %s (made by %r)", source_page.id, source_page.concepts_model)
+                best, source_page = None, None
 
             page = Page(
                 chapter_id=chapter.id, page_number=number, content_text=text,
@@ -99,12 +113,13 @@ class PipelineOrchestrator:
             if best:
                 pages_reused += 1
                 logger.info("Page %s matches %s (%.2f); reusing concepts", number, best.page_id, best.score)
-                source_page = self.db.get(Page, best.page_id)
+                page.concepts_model = source_page.concepts_model
                 concepts = [
                     (c.name, c.description, c.learning_objectives, c.prerequisites)
                     for c in sorted(source_page.concepts, key=lambda c: c.position)
                 ]
             else:
+                page.concepts_model = self.model_name
                 try:
                     extracted = extract_page_concepts(self.llm, text)
                 except ConceptExtractionError as exc:

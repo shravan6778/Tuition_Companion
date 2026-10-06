@@ -12,6 +12,8 @@ from app.pipeline.fingerprint import apply_fingerprint
 class _NoLinksLLM:
     """The seeded concepts already name their prerequisites, so no model call is needed to link them."""
 
+    model_name = "manual"
+
     def complete_json(self, system: str, user: str) -> str:
         return '{"edges": []}'
 
@@ -61,6 +63,7 @@ def seed_ncert_corpus():
             content_text=sample_p1_text,
         )
         apply_fingerprint(page1, sample_p1_text)
+        page1.concepts_model = "manual"  # hand-written sample concepts
         db.add(page1)
         db.flush()
 

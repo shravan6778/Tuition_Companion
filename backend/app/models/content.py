@@ -81,6 +81,7 @@ class Page(Base):
     image_url = Column(String, nullable=True)
     needs_review = Column(Boolean, nullable=False, default=False, server_default="false")  # pipeline doubts about this page
     review_note = Column(String(200), nullable=True)  # why (shown to the teacher)
+    concepts_model = Column(String(60), nullable=True)  # model that produced this page's concepts ('fake' = placeholders)
     uploaded_by_id = Column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     fingerprint = Column(LargeBinary, nullable=True)  # MinHash signature (512 bytes); None for very short pages
 

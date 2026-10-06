@@ -15,10 +15,10 @@ class Settings(BaseSettings):
     storage_dir: str = "storage"
     max_upload_mb: int = 20
     chapter_processing_timeout_min: int = 15  # a 'processing' chapter older than this is treated as stuck
-    ocr_provider: str = "fake"  # "fake" for local dev/tests, "azure" for Azure Document Intelligence
+    ocr_provider: str = "azure"  # "fake" for local dev/tests, "azure" for Azure Document Intelligence
     azure_doc_intel_endpoint: str = ""
     azure_doc_intel_key: str = ""
-    llm_provider: str = "azure"  # "fake" or "openai_compat" (Azure Foundry, OpenAI, etc.)
+    llm_provider: str = "openai_compat"  # "fake" or "openai_compat" (Azure Foundry, OpenAI, etc.)
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "gpt-4.1-mini"  # on Azure this is your DEPLOYMENT name
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     link_max_concepts: int = 120  # chapters with more concepts skip the LLM linking pass
     # --- uploads & requests (content_library/upload.py, link_requests.py)
     require_front_pages: bool = False  # True: a Book can only be created from confirmed front-page metadata
-    front_pages_max_pages: int = 15
+    front_pages_max_pages: int = 8
     max_whole_book_mb: int = 100
     max_whole_book_chapters: int = 60
     open_requests_per_student: int = 10
@@ -44,3 +44,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def refuse_fake_llm(allow_fake: bool) -> None:
+    """Scripts that write public/permanent content must not run on the placeholder model by accident."""
+    if settings.llm_provider.lower() == "fake" and not allow_fake:
+        raise SystemExit(
+            "LLM_PROVIDER is 'fake': it produces PLACEHOLDER concepts (snippets of page text chained together), "
+            "not real extraction. Set LLM_PROVIDER=openai_compat plus LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in "
+            "backend/.env, or pass --allow-fake if you really want placeholders."
+        )

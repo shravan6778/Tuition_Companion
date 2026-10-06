@@ -126,6 +126,7 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm) -> dict:
         "duplicate_names_merged": len(rows) - len(ordered),
         "edges": len(accepted),
         "llm_linking": llm_status,
+        "model": getattr(llm, "model_name", "unknown"),  # 'fake' = placeholder concepts, not real extraction
         "unresolved_prerequisites": unresolved[:MAX_REPORTED],
         "dropped_cycle_edges": dropped[:MAX_REPORTED],
     }

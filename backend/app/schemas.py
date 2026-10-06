@@ -99,10 +99,30 @@ class ChapterGraphOut(BaseModel):
     report: Optional[dict] = None
 
 
+class ChapterMatchOut(BaseModel):
+    """One of YOUR chapters matching a chapter of a book you can see."""
+    book: "BookBrief"
+    chapter_id: Optional[uuid.UUID] = None  # the matching chapter of that book
+    chapter_title: Optional[str] = None
+    kind: str  # "same" (near-identical pages) or "variant" (same content with edits)
+    matched_pages: int
+    pages_checked: int
+    avg_similarity: float
+
+
+class ChapterMatchesOut(BaseModel):
+    chapter_id: uuid.UUID
+    chapter_title: str
+    matches: list[ChapterMatchOut]
+
+
 class VariantSuggestionOut(BaseModel):
     book: "BookBrief"
-    kind: str  # "same" (near-identical pages) or "variant" (an edition/customization of that book)
-    coverage: float  # share of your uploaded pages that match it
+    kind: str  # "same" or "variant"
+    coverage: float  # share of YOUR chapters that match a chapter of this book
+    matched_chapters: int
+    chapters_checked: int
+    candidate_chapters_loaded: int  # how many finished chapters the suggested book has (official books fill up over time)
     avg_similarity: float
     matched_pages: int
     pages_checked: int
