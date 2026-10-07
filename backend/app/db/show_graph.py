@@ -33,6 +33,8 @@ def render_book(db: Session, book_id: uuid.UUID, chapter_number: int | None = No
             out.append(f"   error: {chapter.error_message}")
         if r.get("model") == "fake":
             out.append("   !! PLACEHOLDER concepts: made by the fake LLM (LLM_PROVIDER=fake). Not real extraction.")
+        out.append(f"   search copy: embeddings={chapter.embedding_status}  graph store={chapter.graph_sync_status}"
+                   + (f"  ({chapter.index_error})" if chapter.index_error else ""))
         out.append(
             f"   model={r.get('model', 'unknown (made before models were recorded)')}\n"
             f"   concepts={r.get('concepts', 0)}  edges={r.get('edges', 0)}  merged_duplicates={r.get('duplicate_names_merged', 0)}"

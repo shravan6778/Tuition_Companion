@@ -2,12 +2,13 @@
 
     python -m app.db.relink_chapters            # real LLM per your .env (one call per chapter)
 
-Re-uses the concepts already stored (no OCR, no per-page LLM calls)."""
+Re-uses the concepts already stored (no OCR, no per-page LLM calls). Run `python -m app.db.sync_graph`
+afterwards to refresh the embeddings and the graph-store copy."""
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.llm import get_llm_provider
-from app.models.content import Chapter, ChapterStatus
+from app.models.content import Chapter, ChapterStatus, IndexStatus
 from app.pipeline.graph import build_chapter_graph
 
 
@@ -20,6 +21,8 @@ def main() -> None:
         for chapter in chapters:
             try:
                 report = build_chapter_graph(db, chapter, llm)
+                # concept identity may have changed, so the derived copies (vectors, graph store) are stale
+                chapter.embedding_status = chapter.graph_sync_status = IndexStatus.PENDING
                 db.commit()
                 print(f"{chapter.title!r}: {report['concepts']} concepts, {report['edges']} edges")
             except Exception as exc:  # keep going; one bad chapter shouldn't block the rest

@@ -21,5 +21,18 @@ services:
       POSTGRESQL_CONNECTION_URI: "postgresql://postgres:Postgre21@db:5432/supertokens"
     restart: unless-stopped
 
+  # Knowledge graph + vector index (a rebuildable copy of what PostgreSQL holds; see backend/app/graph_store).
+  # The tag is pinned for reproducibility (3.13.1 = latest stable listed in the release notes on 2026-10-07).
+  # Rebuild after wiping this volume:  cd backend && python -m app.db.sync_graph --rebuild
+  memgraph:
+    image: memgraph/memgraph:3.13.1
+    restart: unless-stopped
+    ports:
+      - "7687:7687"  # Bolt: the backend and python -m app.db.smoke_memgraph connect here
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    command: ["--log-level=WARNING", "--also-log-to-stderr=true"]
+
 volumes:
   pgdata:
+  memgraph_data:

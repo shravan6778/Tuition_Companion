@@ -41,9 +41,30 @@ class Settings(BaseSettings):
     reuse_similarity: float = 0.95  # >= this: same page, reuse its concepts (no LLM call)
     variant_min_similarity: float = 0.60  # >= this (and < reuse): page of a variant/edition
     variant_min_coverage: float = 0.50  # share of a chapter's pages that must match one book to suggest it
+    # --- embeddings (embeddings/, pipeline/indexing.py). PostgreSQL holds the durable copy of every vector.
+    embedding_provider: str = "none"  # "none" (skip) | "fake" (tests/dev) | "openai_compat" (OpenAI, Azure OpenAI/Foundry)
+    embedding_base_url: str = ""  # blank -> llm_base_url (same Azure resource)
+    embedding_api_key: str = ""  # blank -> llm_api_key
+    embedding_model: str = "text-embedding-3-small"  # on Azure this is your DEPLOYMENT name
+    embedding_dim: int = 1536  # text-embedding-3-small's native size; must match the Memgraph vector index
+    embedding_batch_size: int = 32
+    embedding_timeout_s: int = 60
+    embedding_max_chars: int = 6000  # per-page input cap (keeps Hindi/Telugu pages under the model's token limit)
+    embedding_send_dimensions: bool = False  # True: ask the API for `embedding_dim` (text-embedding-3 models only)
+    # --- graph store (graph_store/). Memgraph is a rebuildable copy of what PostgreSQL holds.
+    graph_store_provider: str = "none"  # "none" (skip) | "fake" (tests) | "memgraph"
+    memgraph_uri: str = "bolt://localhost:7687"
+    memgraph_user: str = ""
+    memgraph_password: str = ""
+    memgraph_vector_capacity: int = 20000  # initial vectors per index; Memgraph resizes beyond it
+    memgraph_vector_metric: str = "cos"
+    graph_sync_batch: int = 200  # rows per UNWIND statement when writing a chapter
+    graph_search_max_candidates: int = 2000  # ceiling for the over-fetch that tenant filtering needs
 
 
 settings = Settings()
+
+FAKE_EMBEDDING_MODEL = "fake-embedding"
 
 
 def refuse_fake_llm(allow_fake: bool) -> None:
@@ -53,4 +74,14 @@ def refuse_fake_llm(allow_fake: bool) -> None:
             "LLM_PROVIDER is 'fake': it produces PLACEHOLDER concepts (snippets of page text chained together), "
             "not real extraction. Set LLM_PROVIDER=openai_compat plus LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in "
             "backend/.env, or pass --allow-fake if you really want placeholders."
+        )
+
+
+def refuse_fake_embeddings(allow_fake: bool) -> None:
+    """Scripts that fill the permanent vector copy must not run on hash-based placeholder vectors by accident."""
+    if settings.embedding_provider.lower() == "fake" and not allow_fake:
+        raise SystemExit(
+            "EMBEDDING_PROVIDER is 'fake': it produces PLACEHOLDER vectors (hashed words), not real embeddings. "
+            "Set EMBEDDING_PROVIDER=openai_compat plus EMBEDDING_MODEL (your Azure deployment name) in backend/.env, "
+            "or pass --allow-fake if you really want placeholders."
         )

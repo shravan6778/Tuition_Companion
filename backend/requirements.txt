@@ -12,3 +12,5 @@ pypdf
 azure-ai-documentintelligence  # uncomment when OCR_PROVIDER=azure
 openai
 datasketch==1.5.9
+numpy
+neo4j>=5.20  # Bolt driver for Memgraph (GRAPH_STORE_PROVIDER=memgraph)

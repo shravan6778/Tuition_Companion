@@ -79,6 +79,25 @@ def fake_providers(monkeypatch):
 
     monkeypatch.setattr(settings, "ocr_provider", "fake")
     monkeypatch.setattr(settings, "llm_provider", "fake")
+    # Same for embeddings and Memgraph: off unless a test switches them on (see the `indexing_on` fixture).
+    monkeypatch.setattr(settings, "embedding_provider", "none")
+    monkeypatch.setattr(settings, "graph_store_provider", "none")
+    monkeypatch.setattr(settings, "embedding_dim", 64)
+
+
+@pytest.fixture()
+def indexing_on(monkeypatch):
+    """Fake embeddings + the in-memory graph store, wired the way a configured deployment is."""
+    from app.core.config import settings
+    from app.graph_store import FAKE_STORE
+
+    monkeypatch.setattr(settings, "embedding_provider", "fake")
+    monkeypatch.setattr(settings, "graph_store_provider", "fake")
+    FAKE_STORE.clear()
+    FAKE_STORE.fail_with = None
+    yield FAKE_STORE
+    FAKE_STORE.clear()
+    FAKE_STORE.fail_with = None
 
 
 @pytest.fixture(autouse=True)

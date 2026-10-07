@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Integer, LargeBinary, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Integer, LargeBinary, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -49,10 +49,22 @@ class ChapterStatus:
     ALL = (EMPTY, PROCESSING, READY, FAILED)
 
 
+class IndexStatus:
+    """State of a chapter's DERIVED data (embeddings in PostgreSQL, the copy in Memgraph). It never affects
+    whether the chapter is `ready`: the graph in PostgreSQL is what students use; this is for search."""
+    PENDING = "pending"  # not done yet (or reset because the chapter was reprocessed)
+    DONE = "done"
+    SKIPPED = "skipped"  # that provider/store is switched off in the settings
+    FAILED = "failed"    # last attempt failed; `python -m app.db.sync_graph` retries
+    ALL = (PENDING, DONE, SKIPPED, FAILED)
+
+
 class Chapter(Base):
     __tablename__ = "chapters"
     __table_args__ = (
         CheckConstraint("status IN ('empty','processing','ready','failed')", name="ck_chapter_status"),
+        CheckConstraint("embedding_status IN ('pending','done','skipped','failed')", name="ck_chapter_embedding_status"),
+        CheckConstraint("graph_sync_status IN ('pending','done','skipped','failed')", name="ck_chapter_graph_sync_status"),
     )
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
@@ -66,6 +78,10 @@ class Chapter(Base):
     processing_started_at = Column(DateTime(timezone=True), nullable=True)
     graph_report = Column(JSON, nullable=True)  # summary of the last concept-linking pass (see pipeline/graph.py)
     match_report = Column(JSON, nullable=True)  # how this chapter matched known pages/books (see pipeline/matching.py)
+    embedding_status = Column(String(10), nullable=False, default=IndexStatus.PENDING, server_default=IndexStatus.PENDING)
+    graph_sync_status = Column(String(10), nullable=False, default=IndexStatus.PENDING, server_default=IndexStatus.PENDING)
+    index_error = Column(Text, nullable=True)  # short, secret-free reason when embedding_status/graph_sync_status is failed
+    indexed_at = Column(DateTime(timezone=True), nullable=True)  # last time both stages finished
 
     book = relationship("Book", back_populates="chapters")
     pages = relationship("Page", back_populates="chapter", cascade="all, delete-orphan")
@@ -88,6 +104,8 @@ class Page(Base):
     chapter = relationship("Chapter", back_populates="pages")
     concepts = relationship("Concept", back_populates="page", cascade="all, delete-orphan")
     bands = relationship("PageBand", back_populates="page", cascade="all, delete-orphan")
+    embedding = relationship("ContentEmbedding", foreign_keys="ContentEmbedding.page_id", back_populates="page",
+                             uselist=False, cascade="all, delete-orphan")
 
 
 class PageBand(Base):
@@ -115,6 +133,8 @@ class Concept(Base):
     is_canonical = Column(Boolean, nullable=False, default=True, server_default=true())  # first occurrence in chapter
 
     page = relationship("Page", back_populates="concepts")
+    embedding = relationship("ContentEmbedding", foreign_keys="ContentEmbedding.concept_id", back_populates="concept",
+                             uselist=False, cascade="all, delete-orphan")
     edges_in = relationship("ConceptEdge", foreign_keys="ConceptEdge.concept_id", back_populates="concept", cascade="all, delete-orphan")
     edges_out = relationship("ConceptEdge", foreign_keys="ConceptEdge.prerequisite_id", back_populates="prerequisite", cascade="all, delete-orphan")
 
@@ -140,6 +160,39 @@ class ConceptEdge(Base):
 
     concept = relationship("Concept", foreign_keys=[concept_id], back_populates="edges_in")
     prerequisite = relationship("Concept", foreign_keys=[prerequisite_id], back_populates="edges_out")
+
+
+class ContentEmbedding(Base):
+    """The durable copy of one embedding vector (float32, little-endian). Memgraph's vector index is rebuilt
+    from these rows, so a rebuild never calls the embedding service again.
+
+    Belongs to exactly one Page (its text) or one canonical Concept (name + description). `text_sha256` is the
+    hash of the exact text that was embedded: unchanged text is never re-embedded, and identical text anywhere
+    reuses the vector (same idea as the >=95% page reuse: the uploader already holds that text). Rows go away
+    with their page/concept, so reprocessing a chapter replaces its vectors."""
+    __tablename__ = "content_embeddings"
+    __table_args__ = (
+        CheckConstraint(
+            "(page_id IS NOT NULL AND concept_id IS NULL) OR (page_id IS NULL AND concept_id IS NOT NULL)",
+            name="ck_embedding_page_xor_concept",
+        ),
+        UniqueConstraint("page_id", name="uq_embedding_page"),
+        UniqueConstraint("concept_id", name="uq_embedding_concept"),
+        Index("ix_embedding_model_hash", "model", "text_sha256"),
+    )
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)
+    page_id = Column(Uuid, ForeignKey("pages.id", ondelete="CASCADE"), nullable=True)
+    concept_id = Column(Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=True)
+    model = Column(String(60), nullable=False)  # embedding model/deployment that produced the vector
+    dim = Column(Integer, nullable=False)
+    text_sha256 = Column(String(64), nullable=False)
+    vector = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    page = relationship("Page", foreign_keys=[page_id], back_populates="embedding")
+    concept = relationship("Concept", foreign_keys=[concept_id], back_populates="embedding")
 
 
 class UploadDraft(Base):

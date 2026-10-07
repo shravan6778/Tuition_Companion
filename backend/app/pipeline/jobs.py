@@ -7,7 +7,8 @@ from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.content_library.link_requests import fulfill_requests_for_chapter
 from app.core.storage import read_file
-from app.models.content import Chapter, ChapterStatus
+from app.models.content import Chapter, ChapterStatus, IndexStatus
+from app.pipeline.indexing import index_chapter
 from app.pipeline.orchestrator import PipelineOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -36,12 +37,17 @@ def mark_processing(chapter: Chapter) -> None:
     chapter.status = ChapterStatus.PROCESSING
     chapter.error_message = None
     chapter.processing_started_at = utcnow()
+    # The old pages (and their vectors) are replaced by this run, so the derived copies are out of date again.
+    chapter.embedding_status = IndexStatus.PENDING
+    chapter.graph_sync_status = IndexStatus.PENDING
+    chapter.index_error = None
 
 
 def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory) -> None:
     """Runs after the HTTP response, with its OWN session (the request's session is closed by then).
     Pages and the 'ready' status are committed together, so a failure never leaves half a chapter."""
     db = session_factory()
+    committed_ready = False
     try:
         chapter = db.get(Chapter, chapter_id)
         if chapter is None or chapter.status != ChapterStatus.PROCESSING or not chapter.source_file:
@@ -54,6 +60,7 @@ def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory) 
             chapter.error_message = None
             fulfill_requests_for_chapter(db, chapter)  # students who asked for this chapter get closure
             db.commit()
+            committed_ready = True
         except Exception as exc:
             db.rollback()
             logger.exception("Chapter %s processing failed", chapter_id)
@@ -65,3 +72,7 @@ def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory) 
             db.commit()
     finally:
         db.close()
+    if committed_ready:
+        # Embeddings + the graph-store copy come AFTER the commit and can never fail the chapter (see
+        # pipeline/indexing.py). Their outcome is recorded on the chapter; sync_graph retries failures.
+        index_chapter(session_factory, chapter_id)
