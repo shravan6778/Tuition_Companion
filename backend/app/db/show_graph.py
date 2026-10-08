@@ -55,6 +55,8 @@ def render_book(db: Session, book_id: uuid.UUID, chapter_number: int | None = No
             out.append(line)
         for item in r.get("unresolved_prerequisites", []):
             out.append(f"   ? '{item['concept']}' mentions '{item['prerequisite']}' (no such concept in this chapter)")
+        for item in r.get("near_duplicates_not_merged", [])[:15]:
+            out.append(f"   ~ near duplicate, not merged ({item['similarity']}): '{item['a']}' / '{item['b']}'")
         for item in r.get("dropped_backward_edges", []):
             out.append(f"   < dropped backward edge: '{item['prerequisite']}' comes later than '{item['concept']}'")
         for item in r.get("dropped_cycle_edges", []):

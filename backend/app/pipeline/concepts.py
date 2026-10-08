@@ -18,7 +18,8 @@ SYSTEM = (
     "mentions or clearly implies them. Use only what the page supports; add no outside knowledge. "
     "A concept is an IDEA a student must understand (a definition, law, process, structure, term). Hands-on "
     "activities, experiments, figures, exercises, questions and boxed trivia are NOT concepts: if you list one, "
-    "set its \"kind\" to \"activity\" or \"exercise\"; otherwise use \"idea\". Name each idea in its plain, "
+    "set its \"kind\" to \"activity\" or \"exercise\"; boxed side notes (biographies, trivia, 'Threads of Curiosity', "
+    "ethics or career notes) get \"sidebar\"; otherwise use \"idea\". Name each idea in its plain, "
     "standard textbook form (e.g. 'Cell membrane', not 'Cell Membrane Structure and Function Overview'). "
     "Also set the top-level \"page_kind\": \"content\" for pages that teach, \"recap\" for chapter "
     "summaries / 'At a Glance' pages, \"exercise\" for question and exercise pages, \"other\" for covers, "
@@ -26,7 +27,7 @@ SYSTEM = (
     '{"page_kind":str,"concepts":[{"name":str,"kind":str,"description":str,"learning_objectives":[str],"prerequisites":[str]}]}.'
 )
 
-DROPPED_KINDS = {"activity", "exercise", "figure", "question"}
+DROPPED_KINDS = {"activity", "exercise", "figure", "question", "sidebar"}
 NON_TEACHING_PAGES = {"recap", "exercise"}  # their concepts only repeat or test earlier ones
 _ACTIVITY_NAME = re.compile(r"\b(experiments?|activity|activities|exercises?)\b|^\s*(fig(ure)?\.?|question|let'?s)\b", re.I)
 _RECAP_HEADING = re.compile(

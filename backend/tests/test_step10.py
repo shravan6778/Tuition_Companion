@@ -18,6 +18,11 @@ def test_loose_key_ignores_stop_words_case_and_order():
     assert loose_key("Cell as the Basic Unit of Life") == loose_key("Cell as Basic Unit of Life")
     assert loose_key("Basic unit of life: the cell") == loose_key("Cell as Basic Unit of Life")
     assert loose_key("Cell membrane") != loose_key("Cell wall")
+    assert loose_key("Prokaryotic cells") == loose_key("Prokaryotic cell")
+    assert loose_key("Chloroplasts") == loose_key("chloroplast")
+    assert loose_key("DNA (Deoxyribonucleic acid)") == loose_key("DNA")
+    assert loose_key("Nucleus") != loose_key("Nucleolus") and loose_key("Mitosis") != loose_key("Meiosis")
+    assert loose_key("Endoplasmic Reticulum (ER)") == loose_key("Endoplasmic reticulum")
 
 
 def test_stop_word_variants_merge_and_prerequisites_resolve_to_the_merged_concept(session_factory):
@@ -222,3 +227,26 @@ def test_recap_page_with_no_concepts_is_not_flagged_as_a_bad_scan(session_factor
         ch = make_ready(db, book, "A", 1)
         run(db, ch, llm, pages=[SENTENCES[0], long_recap])
         assert ch.graph_report["review_pages"] == [] and ch.graph_report["recap_pages"] == 1
+
+
+def test_sidebars_are_dropped_and_near_misses_are_reported(session_factory):
+    out = extract_page(Scripted(reply(Mitosis="idea", Arun_Kumar_Sharma_and_Chromosome_Research="sidebar")), "Mitosis divides a cell")
+    assert [c.name for c in out.concepts] == ["Mitosis"] and out.dropped == 1
+
+    near = {"Cell membrane": [1.0, 0.0], "Cell membrane structure": [0.88, 0.475]}  # cosine ~0.88: close, not merged
+    with session_factory() as db:
+        ch = make_chapter(db)
+        add_page(db, ch, 1, ("Cell membrane", []))
+        add_page(db, ch, 2, ("Cell membrane structure", []))
+        report = build_chapter_graph(db, ch, NoLinksLLM(), embedder=lambda names: [near[n] for n in names])
+        assert report["duplicate_names_merged"] == 0
+        assert report["near_duplicates_not_merged"] == [{"a": "Cell membrane", "b": "Cell membrane structure", "similarity": 0.88}]
+
+
+def test_prerequisite_named_without_the_parenthetical_resolves(session_factory):
+    with session_factory() as db:
+        ch = make_chapter(db)
+        add_page(db, ch, 1, ("DNA (Deoxyribonucleic acid)", []))
+        add_page(db, ch, 2, ("Chromatin", ["DNA"]))
+        report = build_chapter_graph(db, ch, NoLinksLLM())
+        assert report["unresolved_prerequisites"] == [] and report["edges"] == 1

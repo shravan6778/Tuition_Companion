@@ -36,9 +36,20 @@ def normalize_name(name: str) -> str:
     return re.sub(r"^(the|a|an) ", "", s)
 
 
+def _singular(word: str) -> str:
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
 def loose_key(name: str) -> str:
-    """normalize_name without stop words and word order: 'Cell as the Basic Unit of Life' == 'Basic unit of the cell life'."""
-    words = [w for w in normalize_name(name).split() if w not in _STOP]
+    """normalize_name without stop words, plurals, parenthetical asides and word order:
+    'Cell as the Basic Unit of Life' == 'Basic unit of the cell life'; 'Prokaryotic cells' == 'Prokaryotic cell';
+    'DNA (Deoxyribonucleic acid)' == 'DNA'."""
+    bare = re.sub(r"\([^)]*\)", " ", name or "")
+    words = [_singular(w) for w in normalize_name(bare).split() if w not in _STOP]
     return " ".join(sorted(words)) or normalize_name(name)
 
 
@@ -46,9 +57,13 @@ def _numbers(key: str) -> frozenset:
     return frozenset(re.findall(r"\d+", key))
 
 
-def merge_by_embedding(keys: list[str], names: dict[str, str], embedder, threshold: float) -> dict[str, str]:
+NEAR_MISS_FLOOR = 0.80  # similar pairs between this and the merge threshold are reported, so the threshold can be tuned
+
+
+def merge_by_embedding(keys: list[str], names: dict[str, str], embedder, threshold: float, near_misses=None) -> dict[str, str]:
     """keys in chapter order -> {key: representative key}. A key joins the first earlier representative whose
-    name vector is >= threshold similar (names with different numbers never merge). Raises if the embedder fails."""
+    name vector is >= threshold similar (names with different numbers never merge). Raises if the embedder fails.
+    near_misses (a list) receives {"a", "b", "similarity"} for pairs of representatives just under the threshold."""
     if len(keys) < 2:
         return {k: k for k in keys}
     vectors = embedder([names[k] for k in keys])
@@ -61,6 +76,11 @@ def merge_by_embedding(keys: list[str], names: dict[str, str], embedder, thresho
         )
         alias[key] = target or key
         if target is None:
+            if near_misses is not None:
+                for r in reps:
+                    sim = cosine(vec[r], vec[key])
+                    if NEAR_MISS_FLOOR <= sim < threshold and _numbers(r) == _numbers(key):
+                        near_misses.append({"a": names[r], "b": names[key], "similarity": round(sim, 3)})
             reps.append(key)
     return alias
 
@@ -105,9 +125,10 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm, embedder=None) -> di
         loose.setdefault(loose_key(concept.name) or str(concept.id), concept.name)
     alias = {k: k for k in loose}
     embed_status = "off"
+    near_misses: list[dict] = []
     if embedder is not None:
         try:
-            alias = merge_by_embedding(list(loose), loose, embedder, settings.concept_merge_similarity)
+            alias = merge_by_embedding(list(loose), loose, embedder, settings.concept_merge_similarity, near_misses)
             embed_status = "done"
         except Exception:  # never fail a chapter over an optional merge; details are not user-facing
             logger.warning("Embedding-based concept merge failed; continuing without it", exc_info=True)
@@ -187,6 +208,7 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm, embedder=None) -> di
         "llm_linking": llm_status,
         "model": getattr(llm, "model_name", "unknown"),  # 'fake' = placeholder concepts, not real extraction
         "merge_by_embedding": embed_status,
+        "near_duplicates_not_merged": sorted(near_misses, key=lambda m: -m["similarity"])[:MAX_REPORTED],
         "dropped_backward_edges": backward[:MAX_REPORTED],
         "unresolved_prerequisites": unresolved[:MAX_REPORTED],
         "dropped_cycle_edges": dropped[:MAX_REPORTED],
