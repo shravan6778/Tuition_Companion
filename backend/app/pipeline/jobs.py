@@ -43,7 +43,7 @@ def mark_processing(chapter: Chapter) -> None:
     chapter.index_error = None
 
 
-def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory) -> None:
+def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory, fresh: bool = False) -> None:
     """Runs after the HTTP response, with its OWN session (the request's session is closed by then).
     Pages and the 'ready' status are committed together, so a failure never leaves half a chapter."""
     db = session_factory()
@@ -55,7 +55,7 @@ def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory) 
         ext = chapter.source_file.rsplit(".", 1)[-1]
         try:
             data = read_file(chapter.source_file)
-            PipelineOrchestrator(db).process_chapter_file(chapter, data, ext, user_id)
+            PipelineOrchestrator(db, reuse_concepts=not fresh).process_chapter_file(chapter, data, ext, user_id)
             chapter.status = ChapterStatus.READY
             chapter.error_message = None
             fulfill_requests_for_chapter(db, chapter)  # students who asked for this chapter get closure

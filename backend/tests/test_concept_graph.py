@@ -99,9 +99,10 @@ def test_same_named_concepts_merge_into_the_first_occurrence(session_factory):
         canonical = {c.name: pn for c, pn in concepts if c.is_canonical}
         assert canonical == {"Matter": 1, "Atom": 2, "Energy": 3}
         assert report["duplicate_names_merged"] == 1
-        # the page-3 duplicate's 'Atom' prerequisite would make Matter<->Atom a cycle, so it is dropped
+        # the page-3 duplicate's 'Atom' prerequisite would make canonical Matter (p1) need Atom (p2): backward, dropped
         assert edges_by_name(db, ch) == {("Matter", "Atom", "page"), ("Matter", "Energy", "page")}
-        assert report["dropped_cycle_edges"] == [{"prerequisite": "Atom", "concept": "Matter"}]
+        assert report["dropped_backward_edges"] == [{"prerequisite": "Atom", "concept": "Matter"}]
+        assert report["dropped_cycle_edges"] == []
         assert all(e.concept_id != e.prerequisite_id for e in db.scalars(select(ConceptEdge)))
 
 
@@ -123,7 +124,17 @@ def test_two_cycle_keeps_the_forward_edge_and_drops_the_backward_one(session_fac
         report = build_chapter_graph(db, ch, NoLinksLLM())
         # B (page 2) needing A (page 1) is the plausible direction; A needing B is the suspect one
         assert edges_by_name(db, ch) == {("A", "B", "page")}
-        assert report["dropped_cycle_edges"] == [{"prerequisite": "B", "concept": "A"}]
+        assert report["dropped_backward_edges"] == [{"prerequisite": "B", "concept": "A"}]
+        assert report["dropped_cycle_edges"] == []
+
+
+def test_same_page_two_cycle_is_broken_and_reported_as_a_cycle(session_factory):
+    with session_factory() as db:
+        ch = make_chapter(db)
+        add_page(db, ch, 1, ("A", ["B"]), ("B", ["A"]))
+        report = build_chapter_graph(db, ch, NoLinksLLM())
+        assert len(edges_by_name(db, ch)) == 1
+        assert len(report["dropped_cycle_edges"]) == 1 and report["dropped_backward_edges"] == []
 
 
 def test_long_cycle_is_broken_and_result_is_acyclic(session_factory):
@@ -134,7 +145,7 @@ def test_long_cycle_is_broken_and_result_is_acyclic(session_factory):
         add_page(db, ch, 3, ("C", ["B"]))
         report = build_chapter_graph(db, ch, NoLinksLLM())
         assert edges_by_name(db, ch) == {("A", "B", "page"), ("B", "C", "page")}
-        assert len(report["dropped_cycle_edges"]) == 1
+        assert len(report["dropped_backward_edges"]) == 1  # A (p1) needing C (p3)
 
         # independent acyclicity check on what is actually stored
         names = {c.id: c.name for c in db.scalars(select(Concept))}
@@ -156,18 +167,17 @@ def test_long_cycle_is_broken_and_result_is_acyclic(session_factory):
             visit(n)
 
 
-def test_edge_order_is_deterministic_forward_first_then_earliest_dependent(session_factory):
-    """A needs B, B needs C, C needs A. Only A->C (A on an earlier page than C) is a 'forward' edge, so it is
-    kept first; of the two backward edges the one into the earliest page (B->A) wins, and C->B is dropped.
-    The same input must always give the same graph, whatever order the rows come back in."""
+def test_only_forward_edges_survive(session_factory):
+    """A needs B, B needs C, C needs A. Only C needing A (A on an earlier page) points forward; the other two
+    would make an early concept depend on a later one and are dropped as backward edges."""
     with session_factory() as db:
         ch = make_chapter(db)
         add_page(db, ch, 1, ("A", ["B"]))
         add_page(db, ch, 2, ("B", ["C"]))
         add_page(db, ch, 3, ("C", ["A"]))
         report = build_chapter_graph(db, ch, NoLinksLLM())
-        assert edges_by_name(db, ch) == {("A", "C", "page"), ("B", "A", "page")}
-        assert report["dropped_cycle_edges"] == [{"prerequisite": "C", "concept": "B"}]
+        assert edges_by_name(db, ch) == {("A", "C", "page")}
+        assert len(report["dropped_backward_edges"]) == 2 and report["dropped_cycle_edges"] == []
 
 
 # ---- LLM linking pass ---------------------------------------------------------------------

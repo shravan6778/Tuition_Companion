@@ -4,9 +4,13 @@
    (lowest page, then position) is canonical; only canonical concepts get edges.
 2. Candidate edges come from (a) page-level prerequisite names that match a canonical concept in this
    chapter and (b) one LLM linking call per chapter (pipeline/linking.py).
-3. Cycles are broken deterministically: edges are added most-plausible first (prerequisite appears on an
-   earlier-or-same page), and any edge that would close a cycle is dropped and listed in the report.
+   Near-duplicate names ("Cell as the Basic Unit of Life" / "Cell as Basic Unit of Life") merge too: first by
+   a stop-word-free key, then (when an embedder is given) by name embedding similarity.
+3. An edge whose prerequisite first appears on a LATER page than its dependent is dropped (a recap page must
+   not make an early concept depend on a late one). Cycles are broken deterministically: edges are added
+   most-plausible first, and any edge that would close a cycle is dropped and listed in the report.
 The stored graph is therefore always a DAG. Nothing is committed here; the caller commits."""
+import logging
 import re
 import unicodedata
 from collections import defaultdict
@@ -16,10 +20,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.embeddings.vectors import cosine
 from app.models.content import Chapter, Concept, ConceptEdge, Page
 from app.pipeline.linking import propose_links
 
+logger = logging.getLogger(__name__)
 MAX_REPORTED = 50
+_STOP = {"the", "a", "an", "of", "in", "on", "and", "as", "to", "for", "its", "their", "is", "are", "by", "with"}
 
 
 def normalize_name(name: str) -> str:
@@ -27,6 +34,35 @@ def normalize_name(name: str) -> str:
     s = re.sub(r"[^\w\s]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return re.sub(r"^(the|a|an) ", "", s)
+
+
+def loose_key(name: str) -> str:
+    """normalize_name without stop words and word order: 'Cell as the Basic Unit of Life' == 'Basic unit of the cell life'."""
+    words = [w for w in normalize_name(name).split() if w not in _STOP]
+    return " ".join(sorted(words)) or normalize_name(name)
+
+
+def _numbers(key: str) -> frozenset:
+    return frozenset(re.findall(r"\d+", key))
+
+
+def merge_by_embedding(keys: list[str], names: dict[str, str], embedder, threshold: float) -> dict[str, str]:
+    """keys in chapter order -> {key: representative key}. A key joins the first earlier representative whose
+    name vector is >= threshold similar (names with different numbers never merge). Raises if the embedder fails."""
+    if len(keys) < 2:
+        return {k: k for k in keys}
+    vectors = embedder([names[k] for k in keys])
+    reps: list[str] = []
+    alias: dict[str, str] = {}
+    vec = dict(zip(keys, vectors))
+    for key in keys:
+        target = next(
+            (r for r in reps if _numbers(r) == _numbers(key) and cosine(vec[r], vec[key]) >= threshold), None
+        )
+        alias[key] = target or key
+        if target is None:
+            reps.append(key)
+    return alias
 
 
 @dataclass
@@ -50,8 +86,10 @@ def _creates_cycle(dependents: dict, prerequisite_id, concept_id) -> bool:
     return False
 
 
-def build_chapter_graph(db: Session, chapter: Chapter, llm) -> dict:
-    """(Re)builds concept identity + edges for one chapter and returns the report (also stored on the chapter)."""
+def build_chapter_graph(db: Session, chapter: Chapter, llm, embedder=None) -> dict:
+    """(Re)builds concept identity + edges for one chapter and returns the report (also stored on the chapter).
+    embedder: optional callable list[str] -> list[vector] used only to merge near-duplicate names; if it fails
+    the chapter is built without that merge (reported as merge_by_embedding='failed')."""
     db.execute(delete(ConceptEdge).where(ConceptEdge.chapter_id == chapter.id))
 
     rows = db.execute(
@@ -62,11 +100,28 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm) -> dict:
     ).all()
 
     # --- 1. identity: merge same-named concepts, first occurrence wins
+    loose: dict[str, str] = {}  # loose key -> first display name
+    for concept, _ in rows:
+        loose.setdefault(loose_key(concept.name) or str(concept.id), concept.name)
+    alias = {k: k for k in loose}
+    embed_status = "off"
+    if embedder is not None:
+        try:
+            alias = merge_by_embedding(list(loose), loose, embedder, settings.concept_merge_similarity)
+            embed_status = "done"
+        except Exception:  # never fail a chapter over an optional merge; details are not user-facing
+            logger.warning("Embedding-based concept merge failed; continuing without it", exc_info=True)
+            embed_status = "failed"
+
+    def key_of(name: str, fallback: str = "") -> str:
+        k = loose_key(name) or fallback
+        return alias.get(k, k)
+
     canon: dict[str, Concept] = {}
     page_of: dict = {}
     keyed: list[tuple[Concept, str]] = []
     for concept, page_number in rows:
-        key = normalize_name(concept.name) or str(concept.id)
+        key = key_of(concept.name, str(concept.id))
         concept.name_key = key
         concept.is_canonical = key not in canon
         canon.setdefault(key, concept)
@@ -81,7 +136,7 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm) -> dict:
     for concept, key in keyed:
         target = canon[key]
         for raw in concept.prerequisites or []:
-            pkey = normalize_name(raw)
+            pkey = key_of(raw)
             if not pkey or pkey == key:
                 continue
             if pkey in canon:
@@ -102,15 +157,19 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm) -> dict:
 
     # --- 3. add plausible edges first; drop whatever would close a cycle
     def rank(c: _Candidate):
-        backward = page_of[c.prerequisite.id] > page_of[c.concept.id]
-        return (backward, c.source != "page", page_of[c.concept.id], page_of[c.prerequisite.id])
+        return (c.source != "page", page_of[c.concept.id], page_of[c.prerequisite.id])
 
     dependents: dict = defaultdict(set)
     accepted: dict[tuple, str] = {}
     dropped: list[dict] = []
+    backward: list[dict] = []
     for cand in sorted(candidates, key=rank):
         pair = (cand.prerequisite.id, cand.concept.id)
         if pair in accepted:
+            continue
+        if page_of[cand.prerequisite.id] > page_of[cand.concept.id]:
+            if {"prerequisite": cand.prerequisite.name, "concept": cand.concept.name} not in backward:
+                backward.append({"prerequisite": cand.prerequisite.name, "concept": cand.concept.name})
             continue
         if _creates_cycle(dependents, cand.prerequisite.id, cand.concept.id):
             dropped.append({"prerequisite": cand.prerequisite.name, "concept": cand.concept.name})
@@ -127,9 +186,31 @@ def build_chapter_graph(db: Session, chapter: Chapter, llm) -> dict:
         "edges": len(accepted),
         "llm_linking": llm_status,
         "model": getattr(llm, "model_name", "unknown"),  # 'fake' = placeholder concepts, not real extraction
+        "merge_by_embedding": embed_status,
+        "dropped_backward_edges": backward[:MAX_REPORTED],
         "unresolved_prerequisites": unresolved[:MAX_REPORTED],
         "dropped_cycle_edges": dropped[:MAX_REPORTED],
     }
+    chapter.graph_report = report
+    db.flush()
+    return report
+
+
+def copy_chapter_graph(db: Session, chapter: Chapter, source: Chapter, concept_map: dict) -> dict:
+    """Same pages, same concepts -> same graph: copy the source chapter's edges and identity instead of asking
+    the LLM again (a second run would give a different set of edges). concept_map: source concept id -> new Concept.
+    Returns the new report; raises KeyError if an edge refers to a concept that was not copied (caller falls back)."""
+    db.execute(delete(ConceptEdge).where(ConceptEdge.chapter_id == chapter.id))
+    for old_id, new in concept_map.items():
+        old = db.get(Concept, old_id)
+        new.name_key, new.is_canonical = old.name_key, old.is_canonical
+    edges = db.scalars(select(ConceptEdge).where(ConceptEdge.chapter_id == source.id)).all()
+    for e in edges:
+        db.add(ConceptEdge(
+            chapter_id=chapter.id, concept_id=concept_map[e.concept_id].id,
+            prerequisite_id=concept_map[e.prerequisite_id].id, source=e.source,
+        ))
+    report = {**(source.graph_report or {}), "edges": len(edges), "edges_copied": True}
     chapter.graph_report = report
     db.flush()
     return report

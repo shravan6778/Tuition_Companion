@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4.1-mini"  # on Azure this is your DEPLOYMENT name
     llm_timeout_s: int = 60
     concept_max_chars: int = 12000  # per-page LLM input cap
+    concept_merge_similarity: float = 0.92  # name-embedding cosine at/above which two concepts in a chapter are one
     link_max_concepts: int = 120  # chapters with more concepts skip the LLM linking pass
     # --- uploads & requests (content_library/upload.py, link_requests.py)
     require_front_pages: bool = False  # True: a Book can only be created from confirmed front-page metadata

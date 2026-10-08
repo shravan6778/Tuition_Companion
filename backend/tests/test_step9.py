@@ -458,7 +458,8 @@ def test_every_search_is_filtered_by_book_and_widens_until_it_has_enough():
     assert [h.name for h in hits] == [("n")] and hits[0].description == ""
     assert seen == [20, 80, 320, 1280]  # widened x4 until the window held one of this book's concepts
     query, params = d.log[0]
-    assert "WITH node, similarity WHERE node.book_id IN $book_ids RETURN" in query  # the whole clause, nothing OR-ed in
+    assert "MATCH (node:Concept) WHERE id(node) = gid AND node.book_id IN $book_ids RETURN" in query  # the whole clause, nothing OR-ed in
+    assert "node.book_id" not in query.split("MATCH (node:Concept)")[0]  # no property read on a raw hit (it may be a deleted node)
     assert params["book_ids"] == ["B"]
     d.log.clear()
     assert s.search_concepts([0.1] * 4, [], k=3) == [] and s.search_pages([0.1] * 4, [], k=3) == [] and d.log == []
@@ -544,6 +545,7 @@ def test_embedding_provider_factory(monkeypatch):
             captured.update(base_url=base_url, api_key=api_key, model=model, dim=dim)
 
     monkeypatch.setattr("app.embeddings.openai_compat_provider.OpenAICompatEmbeddingProvider", Capture)
+    monkeypatch.setattr(settings, "embedding_base_url", "")  # a real .env may set EMBEDDING_BASE_URL; test the blank fallback
     monkeypatch.setattr(settings, "llm_api_key", "llm-key")
     monkeypatch.setattr(settings, "llm_base_url", "https://res.openai.azure.com/openai/v1/")
     monkeypatch.setattr(settings, "embedding_model", "emb-deployment")

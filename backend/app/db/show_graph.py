@@ -39,7 +39,10 @@ def render_book(db: Session, book_id: uuid.UUID, chapter_number: int | None = No
             f"   model={r.get('model', 'unknown (made before models were recorded)')}\n"
             f"   concepts={r.get('concepts', 0)}  edges={r.get('edges', 0)}  merged_duplicates={r.get('duplicate_names_merged', 0)}"
             f"  dropped_loops={len(r.get('dropped_cycle_edges', []))}  unresolved={len(r.get('unresolved_prerequisites', []))}"
-            f"  llm_linking={r.get('llm_linking', '-')}  review_pages={[p['page'] for p in r.get('review_pages', [])]}"
+            f"  llm_linking={r.get('llm_linking', '-')}  review_pages={[p['page'] for p in r.get('review_pages', [])]}\n"
+            f"   dropped_backward={len(r.get('dropped_backward_edges', []))}  dropped_concepts={r.get('dropped_concepts', 0)}"
+            f"  recap_pages={r.get('recap_pages', 0)}  name_merge_by_embedding={r.get('merge_by_embedding', '-')}"
+            f"  edges_copied={r.get('edges_copied', False)}"
         )
         names = {n.id: n.name for n in graph.nodes}
         needs: dict = {}
@@ -52,6 +55,8 @@ def render_book(db: Session, book_id: uuid.UUID, chapter_number: int | None = No
             out.append(line)
         for item in r.get("unresolved_prerequisites", []):
             out.append(f"   ? '{item['concept']}' mentions '{item['prerequisite']}' (no such concept in this chapter)")
+        for item in r.get("dropped_backward_edges", []):
+            out.append(f"   < dropped backward edge: '{item['prerequisite']}' comes later than '{item['concept']}'")
         for item in r.get("dropped_cycle_edges", []):
             out.append(f"   x dropped loop: '{item['prerequisite']}' before '{item['concept']}'")
     return "\n".join(out)

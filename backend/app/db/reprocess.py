@@ -4,7 +4,8 @@
     python -m app.db.reprocess <book-id> --chapter 2  # one chapter number
 
 Use it after fixing .env (e.g. switching from the fake LLM to a real one): each chapter's pages and concepts
-are replaced. Concepts made by the fake model are never reused by a real run."""
+are replaced. Concepts made by the fake model are never reused by a real run.
+--fresh ignores ALL stored concepts (use it after changing the extraction prompt) and costs one LLM call per page."""
 import argparse
 import uuid
 
@@ -16,7 +17,7 @@ from app.models import Book, Chapter, ChapterStatus
 from app.pipeline.jobs import is_actively_processing, mark_processing, run_chapter_job
 
 
-def reprocess(db_factory, book_id: uuid.UUID, chapter_number: int | None = None, allow_fake: bool = False) -> list[str]:
+def reprocess(db_factory, book_id: uuid.UUID, chapter_number: int | None = None, allow_fake: bool = False, fresh: bool = False) -> list[str]:
     refuse_fake_llm(allow_fake)
     with db_factory() as db:
         book = db.get(Book, book_id)
@@ -37,7 +38,7 @@ def reprocess(db_factory, book_id: uuid.UUID, chapter_number: int | None = None,
         db.commit()
         owner = book.owner_teacher_id
     for chapter_id in targets:
-        run_chapter_job(chapter_id, owner, db_factory)
+        run_chapter_job(chapter_id, owner, db_factory, fresh=fresh)
         with db_factory() as db:
             ch = db.get(Chapter, chapter_id)
             ok = ch.status == ChapterStatus.READY
@@ -50,5 +51,6 @@ if __name__ == "__main__":
     parser.add_argument("book_id")
     parser.add_argument("--chapter", type=int)
     parser.add_argument("--allow-fake", action="store_true")
+    parser.add_argument("--fresh", action="store_true", help="extract every page again; reuse no stored concepts")
     args = parser.parse_args()
-    print("\n".join(reprocess(SessionLocal, uuid.UUID(args.book_id), args.chapter, args.allow_fake)))
+    print("\n".join(reprocess(SessionLocal, uuid.UUID(args.book_id), args.chapter, args.allow_fake, args.fresh)))
