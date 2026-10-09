@@ -250,3 +250,71 @@ def test_prerequisite_named_without_the_parenthetical_resolves(session_factory):
         add_page(db, ch, 2, ("Chromatin", ["DNA"]))
         report = build_chapter_graph(db, ch, NoLinksLLM())
         assert report["unresolved_prerequisites"] == [] and report["edges"] == 1
+
+
+def test_pages_after_the_chapter_summary_are_exercises(session_factory):
+    llm = ChapterLLM()
+    summary = "At a Glance\n" + " ".join(["The cell is the basic unit of life and it divides."] * 6)
+    pages = [SENTENCES[0], SENTENCES[1], SENTENCES[2], "rivers carry sediment to the sea " * 8, summary, *[SENTENCES[0] + f" Exercise {i}." for i in range(1)]]
+    with session_factory() as db:
+        book = Book(board="CBSE", class_name="9", subject="Sci", publisher="NCERT", is_reference=True)
+        db.add(book)
+        db.flush()
+        ch = make_ready(db, book, "A", 1)
+        calls_before = llm.page_calls
+        run(db, ch, llm, pages=pages)
+        names = {c.name for c in db.scalars(select(Concept).join(Page).where(Page.chapter_id == ch.id))}
+        assert names == {"Concept 1", "Concept 2", "Concept 3", "Rivers"}  # nothing from the summary or the page after it
+        assert ch.graph_report["recap_pages"] == 2 and ch.graph_report["review_pages"] == []
+        assert llm.page_calls - calls_before == 5  # pages 1-5; the page after the summary cost no LLM call
+
+
+def test_a_summary_heading_early_in_the_chapter_does_not_end_it(session_factory):
+    llm = ChapterLLM()
+    early = "Summary of the last lesson\n" + " ".join(["Atoms were covered earlier and we revise them."] * 6)
+    with session_factory() as db:
+        book = Book(board="CBSE", class_name="9", subject="Sci", publisher="NCERT", is_reference=True)
+        db.add(book)
+        db.flush()
+        ch = make_ready(db, book, "A", 1)
+        run(db, ch, llm, pages=[early, *SENTENCES, "rivers carry sediment to the sea " * 8])
+        names = {c.name for c in db.scalars(select(Concept).join(Page).where(Page.chapter_id == ch.id))}
+        assert {"Concept 1", "Concept 2", "Concept 3", "Rivers"} <= names
+
+
+def test_copied_chapter_inherits_review_flags_and_counters_instead_of_inventing_new_ones(session_factory):
+    llm = ChapterLLM()
+    unreadable = "Exercise questions " + "nothing teachable here at all " * 12  # long page, model returns no concepts
+    pages = [*SENTENCES, unreadable]
+    with session_factory() as db:
+        book = Book(board="CBSE", class_name="9", subject="Sci", publisher="NCERT", is_reference=True)
+        db.add(book)
+        db.flush()
+        first, second = make_ready(db, book, "A", 1), make_ready(db, book, "B", 2)
+        run(db, first, llm, pages=pages)
+        # the model said nothing about page 4, but it was an exercise page: simulate the source NOT being flagged
+        for p in db.scalars(select(Page).where(Page.chapter_id == first.id)):
+            p.needs_review, p.review_note = False, None
+        first.graph_report = {**first.graph_report, "review_pages": [], "recap_pages": 1, "dropped_concepts": 4}
+        db.flush()
+        run(db, second, llm, pages=pages)
+        assert second.graph_report["edges_copied"] is True
+        assert second.graph_report["review_pages"] == []
+        assert second.graph_report["recap_pages"] == 1 and second.graph_report["dropped_concepts"] == 4
+
+
+def test_copied_chapter_keeps_a_review_flag_the_source_had(session_factory):
+    llm = ChapterLLM()
+    with session_factory() as db:
+        book = Book(board="CBSE", class_name="9", subject="Sci", publisher="NCERT", is_reference=True)
+        db.add(book)
+        db.flush()
+        first, second = make_ready(db, book, "A", 1), make_ready(db, book, "B", 2)
+        run(db, first, llm)
+        page = db.scalar(select(Page).where(Page.chapter_id == first.id, Page.page_number == 2))
+        page.needs_review, page.review_note = True, "teacher should check this scan"
+        db.flush()
+        run(db, second, llm)
+        flagged = db.scalar(select(Page).where(Page.chapter_id == second.id, Page.page_number == 2))
+        assert flagged.needs_review and flagged.review_note == "teacher should check this scan"
+        assert [p["page"] for p in second.graph_report["review_pages"]] == [2]

@@ -36,6 +36,15 @@ _RECAP_HEADING = re.compile(
 )
 
 
+_SUMMARY_HEADING = re.compile(r"^\W*(at a glance|chapter summary|summary|key points|points to remember)\b", re.I | re.M)
+SUMMARY_TAIL_FROM = 0.6  # a summary heading only ends the teaching part if it sits in the last 40% of the chapter
+
+
+def looks_like_summary_page(text: str) -> bool:
+    """A chapter-end summary ('At a Glance', 'Summary'). Everything after it is exercise material."""
+    return bool(_SUMMARY_HEADING.search((text or "")[:250]))
+
+
 def looks_like_activity(name: str) -> bool:
     """Deterministic backstop for the prompt rule: an experiment or exercise title is not an idea."""
     return bool(_ACTIVITY_NAME.search(name or ""))

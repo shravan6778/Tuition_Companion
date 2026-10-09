@@ -9,7 +9,7 @@ from app.llm import get_llm_provider
 from app.models.content import Chapter, ChapterStatus, Concept, ConceptEdge, Page
 from app.ocr import get_ocr_provider
 from app.embeddings import get_embedding_provider
-from app.pipeline.concepts import ConceptExtractionError, extract_page, looks_like_activity, looks_like_recap_page
+from app.pipeline.concepts import ConceptExtractionError, SUMMARY_TAIL_FROM, extract_page, looks_like_activity, looks_like_recap_page, looks_like_summary_page
 from app.pipeline.fingerprint import apply_fingerprint, band_keys, compute_minhash, tokenize
 from app.pipeline.graph import build_chapter_graph, copy_chapter_graph
 from app.pipeline.matching import PageMatch, find_matches, summarize_book_matches
@@ -107,8 +107,13 @@ class PipelineOrchestrator:
         reused_from: list[tuple[Page, Page, list[Concept]]] = []  # (new page, source page, its new concepts)
         uncovered = 0  # pages that were extracted/filtered, so the source chapter's edges cannot be copied
         short_empty_pages: list[int] = []
-        for p_data in layout["pages"]:
+        summary_seen = False  # after a chapter-end summary, pages are exercises: no concepts, no LLM calls
+        total_pages = len(layout["pages"])
+        for index, p_data in enumerate(layout["pages"]):
             text, number = p_data["text"], p_data["page_number"]
+            tail = summary_seen
+            if looks_like_summary_page(text) and index >= SUMMARY_TAIL_FROM * total_pages:
+                summary_seen = True
 
             matches: list[PageMatch] = []
             signature = compute_minhash(text)
@@ -130,9 +135,13 @@ class PipelineOrchestrator:
             self.db.add(page)
             self.db.flush()  # also makes this page's bands visible to the next page's lookup
 
-            recap = looks_like_recap_page(text)
+            recap = looks_like_recap_page(text) or tail
             filtered = False
-            if best:
+            if tail:
+                best, source_page = None, None
+                page.concepts_model = self.model_name
+                concepts, filtered = [], True
+            elif best:
                 pages_reused += 1
                 logger.info("Page %s matches %s (%.2f); reusing concepts", number, best.page_id, best.score)
                 page.concepts_model = source_page.concepts_model
@@ -156,7 +165,10 @@ class PipelineOrchestrator:
                 concepts = [(c.name, c.description, c.learning_objectives, c.prerequisites) for c in extraction.concepts]
             recap_pages += 1 if recap else 0
 
-            if not concepts and not filtered and not recap and len(tokenize(text)) >= REVIEW_MIN_WORDS:
+            if best and source_page.needs_review:  # a reused page keeps its source's verdict, never a fresh one
+                page.needs_review, page.review_note = True, source_page.review_note
+                review_pages.append({"page": number, "note": page.review_note})
+            elif not best and not concepts and not filtered and not recap and len(tokenize(text)) >= REVIEW_MIN_WORDS:
                 page.needs_review = True
                 page.review_note = "No concepts were found on a page with a lot of text. It may be a bad scan."
                 review_pages.append({"page": number, "note": page.review_note})
@@ -172,8 +184,8 @@ class PipelineOrchestrator:
             created.append(page)
             if best and not filtered:
                 reused_from.append((page, source_page, new_concepts))
-            elif not signature and not concepts:
-                short_empty_pages.append(number)  # a short page with nothing on it is neutral for copying
+            elif tail or (not signature and not concepts):
+                short_empty_pages.append(number)  # a page with no concepts by design is neutral for copying
             else:
                 uncovered += 1
 
@@ -191,10 +203,10 @@ class PipelineOrchestrator:
         report = self._copied_graph(chapter, reused_from, uncovered, short_empty_pages)
         if report is None:
             report = build_chapter_graph(self.db, chapter, self.llm, self._name_embedder())
-        chapter.graph_report = {
-            **report, "review_pages": review_pages[:MAX_REVIEW_REPORTED],
-            "dropped_concepts": dropped_concepts, "recap_pages": recap_pages,
-        }
+        counters = {"dropped_concepts": dropped_concepts, "recap_pages": recap_pages}
+        if report.get("edges_copied"):  # same pages as the source: its counters are the right ones
+            counters = {k: report.get(k, v) for k, v in counters.items()}
+        chapter.graph_report = {**report, "review_pages": review_pages[:MAX_REVIEW_REPORTED], **counters}
         return created
 
     def _copied_graph(self, chapter, reused_from, uncovered, short_empty_pages):
