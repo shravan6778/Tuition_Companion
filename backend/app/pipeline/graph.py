@@ -233,6 +233,7 @@ def copy_chapter_graph(db: Session, chapter: Chapter, source: Chapter, concept_m
             prerequisite_id=concept_map[e.prerequisite_id].id, source=e.source,
         ))
     report = {**(source.graph_report or {}), "edges": len(edges), "edges_copied": True}
+    report.pop("cross_chapter", None)  # the source's links point at the source's concepts; this chapter gets its own
     chapter.graph_report = report
     db.flush()
     return report

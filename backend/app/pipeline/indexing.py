@@ -26,7 +26,7 @@ from app.embeddings import EmbeddingError, get_embedding_provider
 from app.embeddings.vectors import from_bytes, to_bytes
 from app.graph_store import GraphStoreError, get_graph_store
 from app.graph_store.base import ChapterGraph, ConceptNode, EdgeRow, PageNode
-from app.models.content import Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, IndexStatus, Page
+from app.models.content import Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge, IndexStatus, Page
 from app.pipeline.fingerprint import tokenize
 
 logger = logging.getLogger(__name__)
@@ -206,6 +206,25 @@ def build_chapter_payload(db: Session, chapter: Chapter) -> ChapterGraph:
     return graph
 
 
+def sync_cross_edges(db: Session, book_id) -> bool:
+    """Copy the book's cross-chapter prerequisite edges (PostgreSQL) into the graph store. Best effort: a store
+    outage is logged and the next chapter write / `sync_graph` repeats it. Returns True when written."""
+    try:
+        store = get_graph_store()
+        if store is None:
+            return False
+        rows = db.execute(
+            select(CrossChapterEdge.concept_id, CrossChapterEdge.prerequisite_id)
+            .join(Chapter, Chapter.id == CrossChapterEdge.chapter_id).where(Chapter.book_id == book_id)
+        ).all()
+        store.ensure_schema()
+        store.replace_cross_edges(str(book_id), [EdgeRow(str(c), str(p), "book") for c, p in rows])
+        return True
+    except Exception:
+        logger.warning("Cross-chapter edge sync for book %s failed", book_id, exc_info=True)
+        return False
+
+
 # ---- orchestration ------------------------------------------------------------------------------
 def _fail(db: Session, chapter_id, field_name: str, message: str) -> None:
     """Record a failed stage on a fresh view of the chapter (the failed transaction was rolled back)."""
@@ -277,6 +296,7 @@ def index_chapter(session_factory, chapter_id, *, embed: bool = True) -> IndexRe
                 report.graph_pages, report.graph_concepts, report.graph_edges = len(payload.pages), len(payload.concepts), len(payload.edges)
                 report.without_vectors = sum(1 for n in [*payload.pages, *payload.concepts] if n.embedding is None)
                 db.commit()
+                sync_cross_edges(db, chapter.book_id)  # replacing the chapter dropped its edges to other chapters
             except Exception as exc:
                 db.rollback()
                 logger.exception("Graph sync of chapter %s failed", chapter_id)

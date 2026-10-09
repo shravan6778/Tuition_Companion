@@ -14,6 +14,7 @@ class FakeGraphStore:
 
     def __init__(self):
         self._chapters: dict[str, ChapterGraph] = {}
+        self._cross: dict[str, list] = {}  # book id -> cross-chapter EdgeRows
         self._lock = threading.Lock()
         self.fail_with: Exception | None = None  # tests set this to simulate an outage
         self.replace_calls = 0
@@ -31,6 +32,14 @@ class FakeGraphStore:
             self.replace_calls += 1
             self._chapters[graph.chapter_id] = graph
 
+    def replace_cross_edges(self, book_id: str, edges) -> None:
+        self._check()
+        with self._lock:
+            self._cross[book_id] = list(edges)
+
+    def cross_edges(self, book_id: str) -> list:  # test helper
+        return list(self._cross.get(book_id, []))
+
     def delete_chapter(self, chapter_id: str) -> None:
         self._check()
         with self._lock:
@@ -44,6 +53,7 @@ class FakeGraphStore:
         self._check()
         with self._lock:
             self._chapters.clear()
+            self._cross.clear()
 
     def chapter(self, chapter_id: str) -> ChapterGraph | None:  # test helper
         return self._chapters.get(chapter_id)
@@ -74,9 +84,9 @@ class FakeGraphStore:
         for g in self._chapters.values():
             if g.book_id not in allowed or concept_id not in {c.id for c in g.concepts}:
                 continue
-            names = {c.id: c.name for c in g.concepts}
+            names = {c.id: c.name for other in self._chapters.values() if other.book_id == g.book_id for c in other.concepts}
             needs: dict[str, list[str]] = {}
-            for e in g.edges:
+            for e in [*g.edges, *self._cross.get(g.book_id, [])]:
                 needs.setdefault(e.concept_id, []).append(e.prerequisite_id)
             depth_of: dict[str, int] = {}
             queue = deque([(concept_id, 0)])
@@ -99,7 +109,7 @@ class FakeGraphStore:
             "Chapter": len(graphs),
             "Page": sum(len(g.pages) for g in graphs),
             "Concept": sum(len(g.concepts) for g in graphs),
-            "REQUIRES": sum(len(g.edges) for g in graphs),
+            "REQUIRES": sum(len(g.edges) for g in graphs) + sum(len(v) for v in self._cross.values()),
         }
 
     def close(self) -> None:

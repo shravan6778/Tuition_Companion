@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Integer, LargeBinary, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Float, Index, Integer, LargeBinary, String, Boolean, ForeignKey, JSON, Text, Table, UniqueConstraint, Uuid, true
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -160,6 +160,24 @@ class ConceptEdge(Base):
 
     concept = relationship("Concept", foreign_keys=[concept_id], back_populates="edges_in")
     prerequisite = relationship("Concept", foreign_keys=[prerequisite_id], back_populates="edges_out")
+
+
+class CrossChapterEdge(Base):
+    """'prerequisite_id (in an EARLIER chapter of the same book) must be understood before concept_id'.
+    Kept apart from `concept_edges` so each chapter's own graph stays a self-contained DAG; because these edges
+    only ever point from a lower chapter number to a higher one, the whole-book graph is acyclic too.
+    Rows vanish with either concept (ON DELETE CASCADE) and are rebuilt by pipeline/crosslink.py."""
+    __tablename__ = "cross_chapter_edges"
+    __table_args__ = (
+        UniqueConstraint("concept_id", "prerequisite_id", name="uq_cross_chapter_edge"),
+        CheckConstraint("concept_id <> prerequisite_id", name="ck_cross_edge_not_self"),
+    )
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)  # the dependent's chapter
+    concept_id = Column(Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False, index=True)
+    prerequisite_id = Column(Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False, index=True)
+    similarity = Column(Float, nullable=True)  # name+description vector similarity that proposed the pair
 
 
 class ContentEmbedding(Base):

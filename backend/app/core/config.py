@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     llm_timeout_s: int = 60
     concept_max_chars: int = 12000  # per-page LLM input cap
     concept_merge_similarity: float = 0.92  # name-embedding cosine at/above which two concepts in a chapter are one
+    # --- cross-chapter prerequisites (pipeline/crosslink.py)
+    crosslink_enabled: bool = True
+    crosslink_candidates: int = 6  # nearest earlier concepts offered to the model per new concept
+    crosslink_min_similarity: float = 0.40  # below this an earlier concept is never offered
+    crosslink_keep_similarity: float = 0.50  # a link the model chose is dropped below this (counted as dropped_weak)
+    crosslink_max_per_concept: int = 3
+    crosslink_batch: int = 25  # new concepts per LLM call
+    crosslink_max_concepts: int = 200  # a chapter with more new concepts is not cross-linked
+    crosslink_max_relinks: int = 30  # later chapters re-linked when an earlier one changes
     link_max_concepts: int = 120  # chapters with more concepts skip the LLM linking pass
     # --- uploads & requests (content_library/upload.py, link_requests.py)
     require_front_pages: bool = False  # True: a Book can only be created from confirmed front-page metadata

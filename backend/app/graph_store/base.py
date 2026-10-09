@@ -86,6 +86,10 @@ class GraphStore(Protocol):
     def replace_chapter(self, graph: ChapterGraph) -> None:
         """Delete everything stored for the chapter and write `graph`, atomically."""
 
+    def replace_cross_edges(self, book_id: str, edges: Sequence["EdgeRow"]) -> None:
+        """Replace every cross-chapter prerequisite edge of the book (REQUIRES with source "book"). Replacing a
+        chapter removes its edges to other chapters, so this is called again after each chapter write."""
+
     def delete_chapter(self, chapter_id: str) -> None: ...
 
     def list_chapter_ids(self) -> set[str]: ...

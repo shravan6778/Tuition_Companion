@@ -22,6 +22,20 @@ class FakeLLMProvider:
         if user.startswith("CONCEPTS:\n"):  # chapter linking pass: each concept depends on the previous one
             n = len(re.findall(r"^\d+\. ", user, flags=re.MULTILINE))
             return json.dumps({"edges": [{"concept": i, "prerequisites": [i - 1]} for i in range(2, n + 1)]})
+        if user.startswith("CROSS-CHAPTER\n"):  # cross-chapter linking: each new concept needs its first candidate
+            links, current, in_new = [], None, False
+            for line in user.splitlines():
+                if line.startswith("NEW CONCEPTS"):
+                    in_new = True
+                elif line.startswith("EARLIER CONCEPTS"):
+                    in_new = False
+                m = re.match(r"^(\d+)\. ", line)
+                if in_new and m:
+                    current = int(m.group(1))
+                c = re.match(r"^\s+candidates: (.+)$", line)
+                if in_new and c and current is not None:
+                    links.append({"concept": current, "prerequisites": [int(c.group(1).split(",")[0])]})
+            return json.dumps({"links": links})
         text = user.split("TEXT:\n", 1)[-1]
         lines: list[str] = []
         for line in text.splitlines():

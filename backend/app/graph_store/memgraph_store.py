@@ -182,6 +182,25 @@ class MemgraphStore:
             with self.driver.session() as session:
                 session.execute_write(work)
 
+    def replace_cross_edges(self, book_id: str, edges) -> None:
+        self.ensure_schema()
+        rows = [{"concept_id": e.concept_id, "prerequisite_id": e.prerequisite_id} for e in edges]
+
+        def work(tx):
+            tx.run(
+                "MATCH (:Concept {book_id: $bid})-[r:REQUIRES {source: 'book'}]->(:Concept) DELETE r", bid=book_id
+            ).consume()
+            for batch in _chunks(rows, self._batch):
+                tx.run(
+                    "UNWIND $rows AS e MATCH (c:Concept {id: e.concept_id}), (p:Concept {id: e.prerequisite_id}) "
+                    "CREATE (c)-[:REQUIRES {source: 'book'}]->(p)",
+                    rows=batch,
+                ).consume()
+
+        with self._guard("cross-chapter edge write"):
+            with self.driver.session() as session:
+                session.execute_write(work)
+
     def delete_chapter(self, chapter_id: str) -> None:
         def work(tx):
             tx.run("MATCH (n:Concept {chapter_id: $cid}) DETACH DELETE n", cid=chapter_id).consume()

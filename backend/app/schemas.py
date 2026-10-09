@@ -91,11 +91,21 @@ class GraphEdgeOut(BaseModel):
     source: str  # "page" (name match) or "llm" (chapter linking pass)
 
 
+class CrossChapterEdgeOut(BaseModel):
+    concept_id: uuid.UUID  # in THIS chapter
+    prerequisite_id: uuid.UUID  # in an earlier chapter of the same book
+    prerequisite_name: str
+    prerequisite_chapter_id: uuid.UUID
+    prerequisite_chapter_title: Optional[str] = None
+    similarity: Optional[float] = None
+
+
 class ChapterGraphOut(BaseModel):
     chapter_id: uuid.UUID
     status: str
     nodes: list[GraphNodeOut]
     edges: list[GraphEdgeOut]
+    cross_chapter: list[CrossChapterEdgeOut] = []
     report: Optional[dict] = None
 
 

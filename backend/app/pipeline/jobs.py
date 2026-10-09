@@ -8,6 +8,7 @@ from app.core.errors import ProcessingError
 from app.content_library.link_requests import fulfill_requests_for_chapter
 from app.core.storage import read_file
 from app.models.content import Chapter, ChapterStatus, IndexStatus
+from app.pipeline.crosslink import crosslink_after
 from app.pipeline.indexing import index_chapter
 from app.pipeline.orchestrator import PipelineOrchestrator
 
@@ -76,3 +77,4 @@ def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory, 
         # Embeddings + the graph-store copy come AFTER the commit and can never fail the chapter (see
         # pipeline/indexing.py). Their outcome is recorded on the chapter; sync_graph retries failures.
         index_chapter(session_factory, chapter_id)
+        crosslink_after(session_factory, chapter_id)  # needs the vectors the line above just made; never raises

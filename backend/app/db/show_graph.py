@@ -55,6 +55,11 @@ def render_book(db: Session, book_id: uuid.UUID, chapter_number: int | None = No
             out.append(line)
         for item in r.get("unresolved_prerequisites", []):
             out.append(f"   ? '{item['concept']}' mentions '{item['prerequisite']}' (no such concept in this chapter)")
+        xc = r.get("cross_chapter") or {}
+        if xc:
+            out.append(f"   cross-chapter: {xc.get('status')}  edges={xc.get('edges', 0)}  dropped_weak={xc.get('dropped_weak', 0)}  earlier_chapters={xc.get('earlier_chapters', 0)}")
+        for item in graph.cross_chapter:
+            out.append(f"   ^ '{names[item.concept_id]}' needs '{item.prerequisite_name}' (chapter: {item.prerequisite_chapter_title}, sim {item.similarity})")
         for item in r.get("near_duplicates_not_merged", [])[:15]:
             out.append(f"   ~ near duplicate, not merged ({item['similarity']}): '{item['a']}' / '{item['b']}'")
         for item in r.get("dropped_backward_edges", []):
