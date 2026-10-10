@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     reuse_similarity: float = 0.95  # >= this: same page, reuse its concepts (no LLM call)
     variant_min_similarity: float = 0.60  # >= this (and < reuse): page of a variant/edition
     variant_min_coverage: float = 0.50  # share of a chapter's pages that must match one book to suggest it
+    # --- Layer 3: chapter-title sequence as a third signal (pipeline/structure.py)
+    structure_enabled: bool = True
+    structure_title_overlap: float = 0.75  # share of the shorter title's words that the other title contains
+    structure_min_chapters: int = 2  # in-order matching chapters needed; one matching title proves nothing
+    # --- Layer 4: embeddings as a second similarity signal (pipeline/embedmatch.py)
+    embed_match_enabled: bool = True
+    embed_match_similarity: float = 0.85  # page vs page cosine at or above this counts as the same content (a guess until `python -m app.db.embedmatch` shows real numbers)
+    embed_match_max_pages: int = 20000  # more candidate page vectors than this: skip (keeps the in-memory compare small)
     # --- embeddings (embeddings/, pipeline/indexing.py). PostgreSQL holds the durable copy of every vector.
     embedding_provider: str = "none"  # "none" (skip) | "fake" (tests/dev) | "openai_compat" (OpenAI, Azure OpenAI/Foundry)
     embedding_base_url: str = ""  # blank -> llm_base_url (same Azure resource)

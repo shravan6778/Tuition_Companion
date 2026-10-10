@@ -180,6 +180,27 @@ class CrossChapterEdge(Base):
     similarity = Column(Float, nullable=True)  # name+description vector similarity that proposed the pair
 
 
+class MatchFeedback(Base):
+    """Layer 5: one teacher decision about 'is my book a variant of that one?'. `decision` is `confirmed` (variant_of set),
+    `dismissed` (hide this suggestion for this book from now on) or `retracted` (was confirmed, later cleared or changed;
+    does NOT hide the suggestion). `evidence` is what the suggestion showed at that moment (signal, coverage, similarity,
+    matched counts) or null when the teacher confirmed a book we had not suggested. Nothing here changes a threshold by
+    itself: `python -m app.db.match_feedback` summarises it so the thresholds can be set from real decisions.
+    Private to the owning teacher; rows vanish with either book."""
+    __tablename__ = "match_feedback"
+    __table_args__ = (
+        UniqueConstraint("book_id", "base_book_id", name="uq_match_feedback_pair"),
+        CheckConstraint("book_id <> base_book_id", name="ck_match_feedback_not_self"),
+    )
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)  # the teacher's book
+    base_book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    decision = Column(String(10), nullable=False)  # "confirmed" | "dismissed" | "retracted"
+    evidence = Column(JSON, nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class ContentEmbedding(Base):
     """The durable copy of one embedding vector (float32, little-endian). Memgraph's vector index is rebuilt
     from these rows, so a rebuild never calls the embedding service again.

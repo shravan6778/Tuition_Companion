@@ -118,6 +118,7 @@ class ChapterMatchOut(BaseModel):
     matched_pages: int
     pages_checked: int
     avg_similarity: float
+    signal: str = "fingerprint"  # "fingerprint" (text overlap) or "embedding" (similar meaning; weaker evidence)
 
 
 class ChapterMatchesOut(BaseModel):
@@ -136,6 +137,7 @@ class VariantSuggestionOut(BaseModel):
     avg_similarity: float
     matched_pages: int
     pages_checked: int
+    signal: str = "pages"  # "pages" (text/meaning of the pages) or "structure" (same chapter titles in the same order; weaker evidence)
 
 
 class BookBrief(BaseModel):

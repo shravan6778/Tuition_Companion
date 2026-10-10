@@ -7,14 +7,16 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.content_library import access
+from app.content_library import feedback
 from app.content_library import upload as uploads
 from app.content_library.graph_view import chapter_graph
 from app.content_library.search import search_books
 from app.core.config import settings
 from app.core.storage import save_by_hash
 from app.db.session import get_db, get_session_factory
-from app.models.content import Book, Chapter, ChapterStatus, Page, student_book
+from app.models.content import Book, Chapter, ChapterStatus, MatchFeedback, Page, student_book
 from app.models.room import RoomMember, RoomType
+from app.pipeline import structure
 from app.pipeline.jobs import is_actively_processing, mark_processing, run_chapter_job
 from app.schemas import BulkLinkOut, ChapterMatchesOut, ChapterMatchOut, BookBrief, BookCreate, BookOut, ChapterCreate, ChapterGraphOut, ChapterOut, VariantOfIn, VariantSuggestionOut, MemberOut, PageOut, RoomCreate, RoomOut
 from app.teacher import rooms as svc
@@ -253,7 +255,7 @@ def _chapter_matches(db: Session, teacher, book: Book) -> list[ChapterMatchesOut
                 chapter_id=uuid.UUID(s["chapter_id"]) if s.get("chapter_id") else None,
                 chapter_title=s.get("chapter_title"),
                 kind=s["kind"], matched_pages=s["matched_pages"], pages_checked=s["pages_checked"],
-                avg_similarity=s["avg_similarity"],
+                avg_similarity=s["avg_similarity"], signal=s.get("signal", "fingerprint"),
             ))
         out.append(ChapterMatchesOut(chapter_id=chapter.id, chapter_title=chapter.title, matches=matches))
     return out
@@ -270,16 +272,17 @@ def chapter_matches(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Se
 def variant_suggestions(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
     """Books that look like the base of this one, judged CHAPTER by chapter: a book is suggested when at least
     half of your finished chapters each match a chapter of it. (Counting pages across the whole book would let
-    one long chapter swamp the result, and a partly loaded official book would look like a poor match.)"""
-    book = access.get_owned_book(db, teacher, book_id)
+    one long chapter swamp the result, and a partly loaded official book would look like a poor match.)
+    Suggestions the teacher dismissed are not offered again."""
+    return _variant_suggestions(db, teacher, access.get_owned_book(db, teacher, book_id))
+
+
+def _variant_suggestions(db: Session, teacher, book: Book) -> list[VariantSuggestionOut]:
     per_chapter = [c for c in _chapter_matches(db, teacher, book)]
     checked = [
         c for c in per_chapter
         if (db.get(Chapter, c.chapter_id).match_report or {}).get("pages_checked", 0) > 0
     ]
-    if not checked:
-        return []
-
     pooled: dict[uuid.UUID, dict] = {}
     for chapter in checked:
         for m in chapter.matches:
@@ -303,7 +306,19 @@ def variant_suggestions(book_id: uuid.UUID, teacher=Depends(require_teacher), db
             candidate_chapters_loaded=loaded, avg_similarity=round(avg, 3),
             matched_pages=agg["pages"], pages_checked=pages_total,
         ))
-    return sorted(out, key=lambda v: (v.coverage, v.avg_similarity), reverse=True)[:3]
+    dismissed = feedback.dismissed_ids(db, book.id)
+    out = sorted((v for v in out if v.book.id not in dismissed), key=lambda v: (v.coverage, v.avg_similarity), reverse=True)[:3]
+    # Layer 3: books whose chapter titles follow the same order. Only for books the page evidence did not already
+    # find, after it and only while there is room; works before a single page has been processed.
+    seen = {v.book.id for v in out} | dismissed | ({book.variant_of_id} if book.variant_of_id else set())
+    for hit in structure.suggest(db, book, teacher.id, exclude=seen)[: max(0, 3 - len(out))]:
+        out.append(VariantSuggestionOut(
+            book=BookBrief.model_validate(hit["book"]), kind="variant", coverage=hit["coverage"],
+            matched_chapters=hit["matched_chapters"], chapters_checked=hit["chapters_checked"],
+            candidate_chapters_loaded=hit["candidate_chapters_loaded"], avg_similarity=hit["avg_overlap"],
+            matched_pages=0, pages_checked=0, signal="structure",
+        ))
+    return out
 
 
 @router.post("/books/{book_id}/variant-of", response_model=BookOut)
@@ -319,6 +334,10 @@ def confirm_variant(book_id: uuid.UUID, body: VariantOfIn, teacher=Depends(requi
             raise HTTPException(status.HTTP_409_CONFLICT, "That book is already a variant of this one")
         ancestor = db.get(Book, ancestor.variant_of_id) if ancestor.variant_of_id else None
         hops += 1
+    shown = next((v for v in _variant_suggestions(db, teacher, book) if v.book.id == base.id), None)  # what the teacher was shown
+    if book.variant_of_id is not None and book.variant_of_id != base.id:
+        feedback.record(db, book.id, book.variant_of_id, "retracted")  # switched to a different base
+    feedback.record(db, book.id, base.id, "confirmed", shown.model_dump(mode="json", exclude={"book"}) if shown else None)
     book.variant_of_id = base.id
     db.commit()
     db.refresh(book)
@@ -328,8 +347,37 @@ def confirm_variant(book_id: uuid.UUID, body: VariantOfIn, teacher=Depends(requi
 @router.delete("/books/{book_id}/variant-of", status_code=status.HTTP_204_NO_CONTENT)
 def clear_variant(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
     book = access.get_owned_book(db, teacher, book_id)
+    if book.variant_of_id is not None:
+        feedback.record(db, book.id, book.variant_of_id, "retracted")  # a correction; the suggestion may be offered again
     book.variant_of_id = None
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/books/{book_id}/variant-suggestions/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_variant_suggestion(book_id: uuid.UUID, body: VariantOfIn, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """'No, that is not the base of my book': the suggestion is not offered again for this book."""
+    book = access.get_owned_book(db, teacher, book_id)
+    base = access.get_book_visible_to_teacher(db, teacher, body.base_book_id)
+    if base.id == book.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A book can't be a variant of itself")
+    if base.id == book.variant_of_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "You confirmed this book as the base; clear that first")
+    shown = next((v for v in _variant_suggestions(db, teacher, book) if v.book.id == base.id), None)
+    feedback.record(db, book.id, base.id, "dismissed", shown.model_dump(mode="json", exclude={"book"}) if shown else None)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/books/{book_id}/variant-suggestions/dismiss/{base_book_id}", status_code=status.HTTP_204_NO_CONTENT)
+def undo_dismiss(book_id: uuid.UUID, base_book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Offer a dismissed suggestion again (idempotent)."""
+    book = access.get_owned_book(db, teacher, book_id)
+    row = db.scalar(select(MatchFeedback).where(
+        MatchFeedback.book_id == book.id, MatchFeedback.base_book_id == base_book_id, MatchFeedback.decision == "dismissed"))
+    if row is not None:
+        db.delete(row)
+        db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
