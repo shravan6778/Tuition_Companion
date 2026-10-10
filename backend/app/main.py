@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
+from app.admin.routes import router as admin_router
 from app.auth.routes import router as auth_router
 from app.auth.supertokens_config import init_supertokens
 from app.core.config import settings
@@ -43,5 +44,6 @@ def health():
 
 app.include_router(auth_router)
 app.include_router(teacher_router)
+app.include_router(admin_router)
 app.include_router(student_router)
 app.include_router(parent_router)

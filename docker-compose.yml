@@ -33,6 +33,18 @@ services:
       - memgraph_data:/var/lib/memgraph
     command: ["--log-level=WARNING", "--also-log-to-stderr=true"]
 
+  # Memgraph Lab: the web page for LOOKING at the graph. Start it with `docker compose up -d memgraph-lab`, then open
+  # http://localhost:3000 (it connects to the memgraph service above by itself). Read-only use: nothing here is the source of truth.
+  memgraph-lab:
+    image: memgraph/lab:3.13.1
+    depends_on:
+      - memgraph
+    ports:
+      - "3000:3000"
+    environment:
+      QUICK_CONNECT_MG_HOST: memgraph
+    restart: unless-stopped
+
 volumes:
   pgdata:
   memgraph_data:

@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # --- uploads & requests (content_library/upload.py, link_requests.py)
     require_front_pages: bool = False  # True: a Book can only be created from confirmed front-page metadata
     front_pages_max_pages: int = 8
+    # Comma-separated usernames of teachers who may also delete OFFICIAL books and chapters from the UI/API (empty = nobody).
+    # Everyone else can only delete their own books and chapters. Example: ADMIN_USERNAMES=sandy
+    admin_usernames: str = ""
     max_whole_book_mb: int = 100
     max_whole_book_chapters: int = 60
     open_requests_per_student: int = 10

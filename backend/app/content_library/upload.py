@@ -151,7 +151,7 @@ def create_front_pages_draft(db: Session, teacher: User, upload: ValidatedUpload
     draft = UploadDraft(
         teacher_id=teacher.id, kind="front_pages", source_file=save_by_hash(upload.data, upload.sha256, upload.ext),
         source_sha256=upload.sha256, page_count=layout["page_count"] if "page_count" in layout else len(layout["pages"]),
-        payload={"metadata": metadata.model_dump()},
+        payload={"metadata": metadata.model_dump(), "text_chars": len(text)},
     )
     db.add(draft)
     db.commit()

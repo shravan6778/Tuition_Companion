@@ -115,13 +115,16 @@ def test_report_counts_decisions_and_front_page_corrections(client, session_fact
     client.post(f"/teacher/books/{book_id}/variant-of", json={"base_book_id": ref_id}, headers=th)
     with session_factory() as db:
         book = db.get(Book, uuid.UUID(book_id))
-        book.extracted_metadata = {"board": "CBSE", "publisher": "N C E R T", "subject": book.subject}
+        book.extracted_metadata = {"board": "CBSE", "class_name": "Class " + book.class_name, "publisher": "N C E R T", "subject": book.subject}
         db.commit()
         text = "\n".join(summarize(db))
+        shown = "\n".join(summarize(db, show_changes=True))
     assert "1 teacher decisions" in text and "signal structure:" in text and "confirmed: 1" in text
     assert "confirmed without a suggestion (the system missed it): 0" in text
     assert "publisher: teacher changed 1 of 1" in text and "subject: teacher changed 0 of 1" in text
+    assert "class_name: teacher changed 0 of 1" in text  # 'Class 9' read, '9' confirmed: the same class
     assert ref_id not in text and book_id not in text  # counts only, never ids
+    assert "N C E R T" not in text and "'N C E R T' ->" in shown  # values only when asked for
 
 
 def test_a_page_based_suggestion_can_be_dismissed_too(client, session_factory):

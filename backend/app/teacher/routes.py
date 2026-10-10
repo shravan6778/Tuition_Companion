@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_teacher
 from app.content_library import access
-from app.content_library import feedback
+from app.content_library import deletion, feedback
 from app.content_library import upload as uploads
 from app.content_library.graph_view import chapter_graph
 from app.content_library.search import search_books
@@ -351,6 +351,24 @@ def clear_variant(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Sess
         feedback.record(db, book.id, book.variant_of_id, "retracted")  # a correction; the suggestion may be offered again
     book.variant_of_id = None
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_my_book(book_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Delete one of YOUR books with all its chapters. Students linked to it lose access to it."""
+    deletion.delete_book(db, access.get_owned_book(db, teacher, book_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/books/{book_id}/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_my_chapter(book_id: uuid.UUID, chapter_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
+    """Delete one chapter of one of YOUR books."""
+    book = access.get_owned_book(db, teacher, book_id)
+    chapter = db.get(Chapter, chapter_id)
+    if chapter is None or chapter.book_id != book.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chapter not found")
+    deletion.delete_chapter(db, chapter)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

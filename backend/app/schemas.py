@@ -16,6 +16,7 @@ class UserOut(BaseModel):
     role: str
     link_code: Optional[str] = None
     created_at: datetime
+    is_admin: bool = False  # may delete official books/chapters (see ADMIN_USERNAMES); only /auth/me fills it in
 
 
 # --- Room Schemas ---
@@ -170,6 +171,7 @@ class FrontPagesDraftOut(BaseModel):
     page_count: int
     metadata: BookMetadataOut  # what the system read; the teacher edits/confirms it
     matches: list["BookBrief"]  # known books (official first) that already match this metadata
+    warning: Optional[str] = None  # set when nothing could be read from the pages, so the UI can say so
 
 
 class ChapterRange(BaseModel):

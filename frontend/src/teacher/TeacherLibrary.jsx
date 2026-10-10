@@ -14,6 +14,12 @@ import {
   fetchChapterMatches,
   confirmVariant,
   clearVariant,
+  fetchMe,
+  deleteMyBook,
+  deleteMyChapter,
+  adminDeleteBook,
+  adminDeleteChapter,
+  dismissVariantSuggestion,
 } from "../api/content";
 
 // Convenience: link this book to every student in one of the teacher's single-class rooms.
@@ -166,7 +172,12 @@ export default function TeacherLibrary() {
   const [graph, setGraph] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
   const [chapterMatches, setChapterMatches] = useState({}); // my chapter id -> matches in other books
-  const [dismissed, setDismissed] = useState([]); // base book ids hidden for this session
+  const [dismissed, setDismissed] = useState([]); // base book ids hidden right away (the server remembers them too)
+  const [isAdmin, setIsAdmin] = useState(false); // may also delete official books and chapters
+
+  useEffect(() => {
+    fetchMe().then((me) => setIsAdmin(!!me.is_admin)).catch(() => {});
+  }, []);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) || null;
   const selectedChapter =
@@ -207,6 +218,46 @@ export default function TeacherLibrary() {
       setStatusMessage("Saved. This book is now marked as a variant.");
     } catch (err) {
       setStatusMessage(`Error: ${err.message}`);
+    }
+  }
+
+  async function handleDismissVariant(baseId) {
+    setDismissed((d) => [...d, baseId]);
+    try {
+      await dismissVariantSuggestion(selectedBook.id, baseId);
+    } catch (err) {
+      setStatusMessage(`Error: ${err.message}`);
+    }
+  }
+
+  const canDelete = (book) => !book.is_reference || isAdmin;
+
+  async function handleDeleteBook() {
+    const book = selectedBook;
+    const what = book.is_reference ? "this OFFICIAL book" : "this book";
+    if (!window.confirm(`Delete ${what} (${book.subject}) with all its chapters? Students linked to it will lose access. This cannot be undone.`)) return;
+    try {
+      await (book.is_reference ? adminDeleteBook(book.id) : deleteMyBook(book.id));
+      setSelectedBookId(null);
+      setSelectedChapterId(null);
+      await loadBooks();
+      setStatusMessage("Book deleted.");
+    } catch (err) {
+      setStatusMessage(`Couldn't delete the book: ${err.message}`);
+    }
+  }
+
+  async function handleDeleteChapter(ch) {
+    if (!window.confirm(`Delete chapter ${ch.sequence_num}: ${ch.title}? This cannot be undone.`)) return;
+    try {
+      await (selectedBook.is_reference
+        ? adminDeleteChapter(selectedBook.id, ch.id)
+        : deleteMyChapter(selectedBook.id, ch.id));
+      if (selectedChapterId === ch.id) setSelectedChapterId(null);
+      await loadBooks();
+      setStatusMessage("Chapter deleted.");
+    } catch (err) {
+      setStatusMessage(`Couldn't delete the chapter: ${err.message}`);
     }
   }
 
@@ -377,8 +428,15 @@ export default function TeacherLibrary() {
           <div style={{ width: "60%" }}>
             <h3>
               Chapters for {selectedBook.subject}
-              {selectedBook.is_reference ? " (official, read-only)" : ""}
+              {selectedBook.is_reference ? (isAdmin ? " (official)" : " (official, read-only)") : ""}
             </h3>
+            {canDelete(selectedBook) && (
+              <p>
+                <button type="button" onClick={handleDeleteBook} style={{ color: "crimson" }}>
+                  Delete this book
+                </button>
+              </p>
+            )}
             {!selectedBook.is_reference && (
               <VariantBanner
                 book={selectedBook}
@@ -386,7 +444,7 @@ export default function TeacherLibrary() {
                 suggestions={suggestions}
                 onConfirm={handleConfirmVariant}
                 onClear={handleClearVariant}
-                onDismiss={(id) => setDismissed((d) => [...d, id])}
+                onDismiss={handleDismissVariant}
               />
             )}
             <LinkToRoom book={selectedBook} />
@@ -411,6 +469,18 @@ export default function TeacherLibrary() {
                       {m.book.subject} ({m.book.publisher}){m.book.is_reference ? ", official" : ""}
                     </div>
                   ))}
+                  {canDelete(selectedBook) && ch.status !== "processing" && (
+                    <button
+                      type="button"
+                      style={{ marginLeft: "0.5rem", color: "crimson" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteChapter(ch);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
                   {ch.status === "failed" && (
                     <>
                       <div style={{ color: "crimson", fontSize: "0.85rem" }}>

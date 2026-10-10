@@ -170,3 +170,34 @@ export async function fetchMyRequests() {
 export async function cancelRequest(requestId) {
   return request(`/student/chapter-requests/${requestId}`, { method: "DELETE" });
 }
+
+// --- Delete (own books/chapters for teachers; official ones only for administrators) ---
+
+export async function fetchMe() {
+  return request("/auth/me");
+}
+
+export async function deleteMyBook(bookId) {
+  return request(`/teacher/books/${bookId}`, { method: "DELETE" });
+}
+
+export async function deleteMyChapter(bookId, chapterId) {
+  return request(`/teacher/books/${bookId}/chapters/${chapterId}`, { method: "DELETE" });
+}
+
+export async function adminDeleteBook(bookId) {
+  return request(`/admin/books/${bookId}`, { method: "DELETE" });
+}
+
+export async function adminDeleteChapter(bookId, chapterId) {
+  return request(`/admin/books/${bookId}/chapters/${chapterId}`, { method: "DELETE" });
+}
+
+// "No, that is not the base of my book": the server remembers it and stops suggesting that book.
+export async function dismissVariantSuggestion(bookId, baseBookId) {
+  return request(`/teacher/books/${bookId}/variant-suggestions/dismiss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base_book_id: baseBookId }),
+  });
+}

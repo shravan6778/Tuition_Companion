@@ -15,6 +15,8 @@ from app.schemas import (
     BookBrief, BookMetadataOut, ChapterOut, FrontPagesDraftOut, WholeBookConfirmIn, WholeBookPlanOut,
 )
 
+from app.pipeline.front_matter import is_empty  # noqa: E402
+
 router = APIRouter()  # included into the /teacher router (teacher guard + prefix come from there)
 
 
@@ -26,10 +28,16 @@ def upload_front_pages(file: UploadFile = File(...), teacher=Depends(require_tea
     limiter.check("front-pages", str(teacher.id), settings.rate_front_pages_per_hour, 3600)
     upload = uploads.read_validated_upload(file, settings.max_upload_mb)
     draft, metadata, matches = uploads.create_front_pages_draft(db, teacher, upload)
+    warning = None
+    if is_empty(metadata):
+        chars = (draft.payload or {}).get("text_chars", 0)
+        warning = (f"We read {chars} characters from these pages but could not find the book's details in them. "
+                   "Upload the cover and the publisher/edition pages (clear scans), or fill the details in by hand.")
     return FrontPagesDraftOut(
         draft_id=draft.id, page_count=draft.page_count,
         metadata=BookMetadataOut(**metadata.model_dump()),
         matches=[BookBrief.model_validate(b) for b in matches],
+        warning=warning,
     )
 
 

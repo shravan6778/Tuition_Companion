@@ -1,8 +1,9 @@
 """Layer 5 report: what teachers decided about variant suggestions, and how often they correct the front-page metadata.
 
-    python -m app.db.match_feedback
+    python -m app.db.match_feedback             # counts and number ranges only
+    python -m app.db.match_feedback --changes   # also list each corrected front-page field as read -> confirmed
 
-Read-only, operator use: counts and number ranges only (no book titles, ids or teachers). Nothing here changes a
+Read-only, operator use: no book titles, ids or teachers (`--changes` shows only the metadata values the teacher edited). Nothing here changes a
 threshold on its own; use it to set the guesses (EMBED_MATCH_SIMILARITY, STRUCTURE_TITLE_OVERLAP, VARIANT_MIN_COVERAGE)
 from real decisions: a threshold should sit above the biggest number among `dismissed` and below the smallest among
 `confirmed`. `confirmed without a suggestion` are books the system missed entirely."""
@@ -11,6 +12,7 @@ from collections import defaultdict
 
 from sqlalchemy import select
 
+from app.content_library.search import normalize_class
 from app.db.session import SessionLocal
 from app.models import Book, MatchFeedback
 from app.pipeline.graph import normalize_name
@@ -22,7 +24,14 @@ def _range(values: list[float]) -> str:
     return "n/a" if not values else f"min {min(values):.2f}, median {statistics.median(values):.2f}, max {max(values):.2f}"
 
 
-def summarize(db) -> list[str]:
+def _same(field: str, read, final) -> bool:
+    """Equal after the same tidying the library search uses ('IX', 'Class 9' and '9' are one class)."""
+    if field == "class_name":
+        return normalize_class(read or "") == normalize_class(final or "")
+    return normalize_name(read or "") == normalize_name(final or "")
+
+
+def summarize(db, show_changes: bool = False) -> list[str]:
     rows = list(db.scalars(select(MatchFeedback)))
     out = [f"variant suggestions: {len(rows)} teacher decisions"]
     by: dict = defaultdict(lambda: defaultdict(list))  # signal -> decision -> [evidence]
@@ -45,13 +54,16 @@ def summarize(db) -> list[str]:
     books = [b for b in db.scalars(select(Book).where(Book.extracted_metadata.is_not(None)))]
     out.append(f"front-page metadata: {len(books)} books confirmed from front pages")
     for f in FIELDS:
-        pairs = [(normalize_name((b.extracted_metadata or {}).get(f) or ""), normalize_name(getattr(b, f) or "")) for b in books]
-        changed = sum(1 for read, final in pairs if read != final)
+        pairs = [((b.extracted_metadata or {}).get(f), getattr(b, f)) for b in books]
+        changed = [(read, final) for read, final in pairs if not _same(f, read, final)]
         if books:
-            out.append(f"  {f}: teacher changed {changed} of {len(books)}")
+            out.append(f"  {f}: teacher changed {len(changed)} of {len(books)}")
+        if show_changes:
+            out += [f"      {read!r} -> {final!r}" for read, final in changed]
     return out
 
 
 if __name__ == "__main__":
+    import sys
     with SessionLocal() as session:
-        print("\n".join(summarize(session)))
+        print("\n".join(summarize(session, show_changes="--changes" in sys.argv)))

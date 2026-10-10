@@ -22,6 +22,7 @@ export default function NewBookWizard({ onCreated, onUseExisting }) {
   const [manual, setManual] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [warn, setWarn] = useState(false); // the message is a warning (nothing could be read), shown in orange
 
   const showForm = manual || draft;
 
@@ -43,12 +44,16 @@ export default function NewBookWizard({ onCreated, onUseExisting }) {
         is_customized: !!m.is_customized,
       });
       setDraft({ draft_id: d.draft_id, matches: d.matches });
+      setWarn(!!d.warning);
       setMessage(
-        d.matches.length
-          ? "We found books that already match. Check them before creating a new one."
-          : "Check the details below, fix anything that's wrong, then create the book.",
+        d.warning
+          ? `${d.warning} The form below is empty: fill it in by hand.`
+          : d.matches.length
+            ? "We found books that already match. Check them before creating a new one."
+            : "Check the details below, fix anything that's wrong, then create the book.",
       );
     } catch (err) {
+      setWarn(false);
       setMessage(err.message);
     } finally {
       setBusy(false);
@@ -118,7 +123,7 @@ export default function NewBookWizard({ onCreated, onUseExisting }) {
         </>
       )}
 
-      {message && <p style={{ color: "blue" }}>{message}</p>}
+      {message && <p style={{ color: warn ? "#b45f06" : "blue" }}>{message}</p>}
 
       {draft?.matches?.length > 0 && (
         <div style={{ background: "#eef6ff", padding: "0.5rem", marginBottom: "0.75rem" }}>
