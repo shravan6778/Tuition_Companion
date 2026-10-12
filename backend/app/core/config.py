@@ -81,6 +81,19 @@ class Settings(BaseSettings):
     memgraph_vector_metric: str = "cos"
     graph_sync_batch: int = 200  # rows per UNWIND statement when writing a chapter
     graph_search_max_candidates: int = 2000  # ceiling for the over-fetch that tenant filtering needs
+    # --- Phase 3 (assignments, doubts, checks). Numbers marked "guess" are set from real output of the proof commands.
+    exercise_map_top_k: int = 3  # concepts proposed per exercise page
+    exercise_map_min_similarity: float = 0.30  # guess: page-vs-concept cosine below this is never proposed (python -m app.db.exercise_map)
+    exercise_map_max_concepts: int = 10  # an exercise never maps to more concepts than a check may ask about
+    retrieval_min_similarity: float = 0.35  # guess: best page/concept cosine below this = "not in your book" (python -m app.db.retrieval_probe)
+    retrieval_candidates: int = 8  # hits fetched per kind before scoping
+    retrieval_scope_overfetch: int = 6  # a scoped search fetches this many times more, because other chapters crowd the top
+    retrieval_prereq_depth: int = 2  # how far up the prerequisite graph a refresher goes
+    check_min_questions: int = 2  # comprehension check floor: even one concept gets a real check
+    check_max_questions: int = 10  # ceiling: a whole chapter is not an exhausting test
+    weak_below: float = 0.6  # mastery under this is "weak"
+    photo_min_words: int = 8  # OCR text shorter than this: ask the student to retake the photo
+    photo_page_words: int = 60  # OCR text at least this long is a whole page, not a doubt
 
 
 settings = Settings()

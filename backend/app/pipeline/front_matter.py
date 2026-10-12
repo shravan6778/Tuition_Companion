@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from app.content_library.publishers import board_is_really_a_publisher
+
 from app.core.errors import ProcessingError
 
 MAX_RETRIES = 2
@@ -20,6 +22,9 @@ SYSTEM = (
     "'is_customized' is true only if the pages say the book was made for a specific school, and 'school' is then its name. "
     "Write class_name as 'Class N' even if the pages say 'Grade 9', 'Std. IX' or 'Standard 9'. 'publisher' is the body that "
     "publishes the book (for example NCERT for the National Council of Educational Research and Training). "
+    "'board' is the EXAMINATION board (CBSE, ICSE, a state board...). NCERT, SCERT and other publishers are NOT boards: use null "
+    "when the pages name no examination board. If the pages give the publisher's short name (NCERT next to 'National Council of "
+    "Educational Research and Training'), use the short name. "
     "Return null only for what the text really does not state."
 )
 
@@ -79,7 +84,10 @@ def parse_reply(raw: str) -> "BookMetadata":
         data = json.loads(raw)
     except ValueError as exc:
         raise ValidationError.from_exception_data("BookMetadata", [{"type": "value_error", "loc": (), "input": raw, "ctx": {"error": exc}}]) from exc
-    return BookMetadata.model_validate(_clean_keys(data))
+    meta = BookMetadata.model_validate(_clean_keys(data))
+    if board_is_really_a_publisher(meta.board, meta.publisher):
+        meta.board = None  # models often put 'NCERT' here; it is the publisher
+    return meta
 
 
 def extract_book_metadata(provider, text: str) -> BookMetadata:

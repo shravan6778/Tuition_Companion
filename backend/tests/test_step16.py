@@ -226,3 +226,55 @@ def test_an_empty_official_book_is_named_and_the_fix_is_given(session_factory):
         db.flush()
         fails = [r[2] for r in pc.check_official_books(db) if r[0] == "FAIL"]
         assert len(fails) == 1 and "no chapters at all" in fails[0] and f"drop_book --book {empty.id}" in fails[0] and "edition 2026" in fails[0]
+
+
+# ---------------- what the real NCERT front pages produced (Oct 2026 run) ----------------
+from app.content_library.publishers import acronym, board_is_really_a_publisher, same_publisher
+from app.content_library.search import match_metadata
+
+FULL = "National Council of Educational Research and Training"
+
+
+def test_publisher_written_long_short_or_with_dots_is_one_publisher():
+    assert acronym(FULL) == "ncert" and acronym("NCERT") == ""
+    assert same_publisher(FULL, "NCERT") and same_publisher("N.C.E.R.T.", "NCERT") and same_publisher("N C E R T", FULL)
+    assert not same_publisher("Oxford University Press", "NCERT") and not same_publisher("", "NCERT") and not same_publisher("Pearson", FULL)
+
+
+def test_ncert_is_never_taken_as_the_board():
+    assert board_is_really_a_publisher("NCERT") and board_is_really_a_publisher("N.C.E.R.T.") and board_is_really_a_publisher(FULL)
+    assert board_is_really_a_publisher("Bharati Board", "Bharati Board") and not board_is_really_a_publisher("CBSE", "NCERT")
+    m = parse_reply(json.dumps({"board": "NCERT", "class_name": "Class 10", "subject": "Science", "publisher": FULL, "edition": "Reprint 2026-27"}))
+    assert m.board is None and m.publisher == FULL and m.class_name == "Class 10"
+
+
+def test_the_real_reading_finds_the_official_book_it_is_a_copy_of(session_factory):
+    with session_factory() as db:
+        official = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="NCERT", is_reference=True)
+        other_class = Book(board="CBSE", class_name="Class 10", subject="Science", publisher="NCERT", is_reference=True)
+        db.add_all([official, other_class])
+        db.flush()
+        seen = BookMetadata(board="NCERT", class_name="Class IX", subject="Science", publisher=FULL, edition="Reprint 2026-27")
+        who = type("T", (), {"id": uuid.uuid4()})()
+        assert [b.id for b in match_metadata(db, who, seen)] == [official.id]  # before the fix: board 'NCERT' and a long publisher name -> no match
+        assert match_metadata(db, who, BookMetadata(class_name="Class 8", subject="Science", publisher=FULL)) == []  # another class is another book
+        no_publisher = BookMetadata(board="NCERT", class_name="Class 9", subject="Science")  # the board slot held a publisher name
+        assert [b.id for b in match_metadata(db, who, no_publisher)] == [official.id]
+
+
+def test_try_front_pages_also_shows_the_library_match(tmp_path, session_factory):
+    pdf = tmp_path / "front.pdf"
+    pdf.write_bytes(front_pdf())
+    with session_factory() as db:
+        db.add(Book(board="CBSE", class_name="Class 9", subject="Science", publisher="NCERT", edition="2026", is_reference=True))
+        db.commit()
+
+    class Ocr:
+        def extract_layout(self, data, ext):
+            return {"pages": [{"text": "SCIENCE TEXTBOOK FOR CLASS IX NCERT National Council of Educational Research and Training"}]}
+
+    class Llm:
+        def complete_json(self, system, user):
+            return json.dumps({"board": "NCERT", "class_name": "Class 9", "subject": "Science", "publisher": FULL})
+    text = "\n".join(try_front_pages.run(str(pdf), Ocr(), Llm(), db_factory=session_factory))
+    assert "'board': None" in text and "library match: NCERT Class 9 Science (edition 2026)" in text

@@ -9,7 +9,7 @@ from app.llm import get_llm_provider
 from app.models.content import Chapter, ChapterStatus, Concept, ConceptEdge, Page
 from app.ocr import get_ocr_provider
 from app.embeddings import get_embedding_provider
-from app.pipeline.concepts import ConceptExtractionError, SUMMARY_TAIL_FROM, extract_page, looks_like_activity, looks_like_recap_page, looks_like_summary_page
+from app.pipeline.concepts import ConceptExtractionError, SUMMARY_TAIL_FROM, extract_page, heading_page_kind, looks_like_activity, looks_like_recap_page, looks_like_summary_page
 from app.pipeline.fingerprint import apply_fingerprint, band_keys, compute_minhash, tokenize
 from app.pipeline.graph import build_chapter_graph, copy_chapter_graph
 from app.pipeline.matching import PageMatch, find_matches, summarize_book_matches
@@ -140,11 +140,15 @@ class PipelineOrchestrator:
             if tail:
                 best, source_page = None, None
                 page.concepts_model = self.model_name
+                page.page_kind = "exercise"  # after the chapter-end summary everything is exercise material
                 concepts, filtered = [], True
             elif best:
                 pages_reused += 1
                 logger.info("Page %s matches %s (%.2f); reusing concepts", number, best.page_id, best.score)
                 page.concepts_model = source_page.concepts_model
+                page.page_kind = source_page.page_kind or "content"
+                if recap and page.page_kind == "content":
+                    page.page_kind = heading_page_kind(text) or "recap"
                 concepts = [
                     (c.name, c.description, c.learning_objectives, c.prerequisites)
                     for c in sorted(source_page.concepts, key=lambda c: c.position)
@@ -162,6 +166,7 @@ class PipelineOrchestrator:
                 dropped_concepts += extraction.dropped
                 filtered = extraction.dropped > 0
                 recap = recap or extraction.page_kind in ("recap", "exercise")
+                page.page_kind = extraction.page_kind
                 concepts = [(c.name, c.description, c.learning_objectives, c.prerequisites) for c in extraction.concepts]
             recap_pages += 1 if recap else 0
 

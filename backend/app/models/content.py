@@ -86,8 +86,21 @@ class Chapter(Base):
     book = relationship("Book", back_populates="chapters")
     pages = relationship("Page", back_populates="chapter", cascade="all, delete-orphan")
 
+class PageKind:
+    """What a page IS, saved by the pipeline (Phase 3 needs it: exercise pages carry no concepts, so an exercise
+    assignment is scoped from them). `content` teaches, `recap` is a chapter summary, `exercise` holds questions."""
+    CONTENT = "content"
+    RECAP = "recap"
+    EXERCISE = "exercise"
+    OTHER = "other"  # covers, indexes, blanks
+    ALL = (CONTENT, RECAP, EXERCISE, OTHER)
+
+
 class Page(Base):
     __tablename__ = "pages"
+    __table_args__ = (
+        CheckConstraint("page_kind IN ('content','recap','exercise','other')", name="ck_page_kind"),
+    )
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
     chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
@@ -95,6 +108,7 @@ class Page(Base):
     content_text = Column(Text, nullable=False)
     layout_data = Column(JSON, nullable=True)  # Azure Document Intelligence layout data
     image_url = Column(String, nullable=True)
+    page_kind = Column(String(10), nullable=False, default=PageKind.CONTENT, server_default=PageKind.CONTENT)  # see PageKind
     needs_review = Column(Boolean, nullable=False, default=False, server_default="false")  # pipeline doubts about this page
     review_note = Column(String(200), nullable=True)  # why (shown to the teacher)
     concepts_model = Column(String(60), nullable=True)  # model that produced this page's concepts ('fake' = placeholders)

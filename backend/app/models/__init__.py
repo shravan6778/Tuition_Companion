@@ -1,6 +1,6 @@
 from .base import Base
 from .content import (
-    Book, Chapter, ChapterRequest, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge, IndexStatus, MatchFeedback, Page, PageBand,
+    Book, Chapter, ChapterRequest, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge, IndexStatus, MatchFeedback, Page, PageBand, PageKind,
     UploadDraft, student_book,
 )
 from .links import ParentStudentLink
@@ -9,6 +9,6 @@ from .user import Role, User
 
 __all__ = [
     "Base", "Book", "Chapter", "ChapterRequest", "ChapterStatus", "Concept", "ConceptEdge", "ContentEmbedding", "CrossChapterEdge", "IndexStatus", "MatchFeedback", "Page",
-    "PageBand", "UploadDraft", "ParentStudentLink",
+    "PageBand", "PageKind", "UploadDraft", "ParentStudentLink",
     "Role", "Room", "RoomMember", "RoomType", "User", "student_book",
 ]

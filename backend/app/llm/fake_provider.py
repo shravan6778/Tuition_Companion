@@ -36,6 +36,16 @@ class FakeLLMProvider:
                 if in_new and c and current is not None:
                     links.append({"concept": current, "prerequisites": [int(c.group(1).split(",")[0])]})
             return json.dumps({"links": links})
+        if user.startswith("STUDENT DOUBT\n"):  # calibration: a student's own words about the page
+            body = user.split("PAGE:\n", 1)[-1].split()
+            return json.dumps({"doubt": "I do not understand " + " ".join(body[:6])})
+        if user.startswith("CHECK QUESTION\n"):  # one multiple-choice question about one concept
+            name = re.search(r"^CONCEPT: (.+)$", user, flags=re.MULTILINE)
+            name = name.group(1) if name else "the idea"
+            return json.dumps({"question": f"Which statement about {name} is correct?",
+                               "options": [f"{name} is described in the text", "It is unrelated to the chapter",
+                                           "It is only a figure", "It is a sidebar"],
+                               "correct_index": 0, "explanation": f"The text describes {name}."})
         text = user.split("TEXT:\n", 1)[-1]
         lines: list[str] = []
         for line in text.splitlines():

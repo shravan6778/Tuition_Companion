@@ -45,6 +45,25 @@ def looks_like_summary_page(text: str) -> bool:
     return bool(_SUMMARY_HEADING.search((text or "")[:250]))
 
 
+_EXERCISE_HEADING = re.compile(r"^\W*(exercises?|review questions|questions)\b", re.I | re.M)
+
+
+def heading_page_kind(text: str) -> str | None:
+    """'exercise' / 'recap' when the page STARTS with such a heading (first 250 chars), else None. Deterministic,
+    so old chapters can be labelled without a model call (python -m app.db.backfill_page_kind)."""
+    head = (text or "")[:250]
+    if _EXERCISE_HEADING.search(head):
+        return "exercise"
+    if _SUMMARY_HEADING.search(head):
+        return "recap"
+    return None
+
+
+def normalize_page_kind(kind: str | None) -> str:
+    kind = (kind or "content").strip().lower()
+    return kind if kind in ("content", "recap", "exercise", "other") else "content"
+
+
 def looks_like_activity(name: str) -> bool:
     """Deterministic backstop for the prompt rule: an experiment or exercise title is not an idea."""
     return bool(_ACTIVITY_NAME.search(name or ""))
@@ -86,12 +105,14 @@ class PageExtraction:
 def _filter(result: PageConcepts, page_text: str) -> PageExtraction:
     kind = (result.page_kind or "content").strip().lower()
     if kind in NON_TEACHING_PAGES or looks_like_recap_page(page_text):
-        return PageExtraction([], len(result.concepts), kind if kind in NON_TEACHING_PAGES else "recap")
+        # the heading is more reliable than the model about WHICH kind of non-teaching page this is
+        shown = heading_page_kind(page_text) or (kind if kind in NON_TEACHING_PAGES else "recap")
+        return PageExtraction([], len(result.concepts), shown)
     kept = [
         c for c in result.concepts
         if (c.kind or "idea").strip().lower() not in DROPPED_KINDS and not looks_like_activity(c.name)
     ]
-    return PageExtraction(kept, len(result.concepts) - len(kept), kind)
+    return PageExtraction(kept, len(result.concepts) - len(kept), normalize_page_kind(kind))
 
 
 def extract_page_concepts(provider, page_text: str) -> list[ExtractedConcept]:

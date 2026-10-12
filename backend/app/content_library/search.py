@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.content_library import access
 from app.models import Book, User
+from app.content_library.publishers import board_is_really_a_publisher, same_publisher
 from app.pipeline.graph import normalize_name
 
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10, "xi": 11, "xii": 12}
@@ -63,6 +64,8 @@ def match_metadata(db: Session, teacher: User, metadata) -> list[Book]:
         "subject": normalize_name(metadata.subject or ""),
         "publisher": normalize_name(metadata.publisher or ""),
     }
+    if board_is_really_a_publisher(metadata.board, metadata.publisher):
+        stated["board"] = ""  # 'NCERT' read as the board: a publisher, so it says nothing about the board
     stated = {k: v for k, v in stated.items() if v}
     if len(stated) < 2:
         return []
@@ -74,7 +77,8 @@ def match_metadata(db: Session, teacher: User, metadata) -> list[Book]:
         }
         if any(k in stated and have[k] != stated[k] for k in ("class", "subject")):
             continue  # a different class or subject is a different book, however well the rest matches
-        hits = sum(1 for k, v in stated.items() if have[k] == v)
+        hits = sum(1 for k, v in stated.items()
+                   if (same_publisher(book.publisher, metadata.publisher) if k == "publisher" else have[k] == v))
         if hits >= 2 and hits / len(stated) >= 0.75:
             scored.append((hits / len(stated), book.is_reference, book))
     scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
