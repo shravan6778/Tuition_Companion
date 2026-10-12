@@ -85,14 +85,14 @@ class Settings(BaseSettings):
     exercise_map_top_k: int = 3  # concepts proposed per exercise page
     exercise_map_min_similarity: float = 0.30  # guess: page-vs-concept cosine below this is never proposed (python -m app.db.exercise_map)
     exercise_map_max_concepts: int = 10  # an exercise never maps to more concepts than a check may ask about
-    retrieval_min_similarity: float = 0.35  # guess: best page/concept cosine below this = "not in your book" (python -m app.db.retrieval_probe)
+    retrieval_min_similarity: float = 0.41  # measured Oct 2026 (retrieval_probe: in-book p10 0.585, off-topic max 0.234, midpoint 0.41): best page/concept cosine below this = "not in your book"
     retrieval_candidates: int = 8  # hits fetched per kind before scoping
     retrieval_scope_overfetch: int = 6  # a scoped search fetches this many times more, because other chapters crowd the top
     retrieval_prereq_depth: int = 2  # how far up the prerequisite graph a refresher goes
     check_min_questions: int = 2  # comprehension check floor: even one concept gets a real check
     check_max_questions: int = 10  # ceiling: a whole chapter is not an exhausting test
     weak_below: float = 0.6  # mastery under this is "weak"
-    photo_min_words: int = 8  # OCR text shorter than this: ask the student to retake the photo
+    photo_min_words: int = 4  # OCR text shorter than this: ask the student to retake the photo (a real photographed doubt read as 8 words; short doubts must pass, the retrieval cut-off refuses noise)
     photo_page_words: int = 60  # OCR text at least this long is a whole page, not a doubt
 
 

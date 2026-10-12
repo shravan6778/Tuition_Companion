@@ -175,6 +175,17 @@ def test_exercise_map_command_prints_the_evidence_and_writes_nothing(session_fac
     assert "page 3:" in text and "PROPOSED: Cell" in text and "Nothing was written" in text
 
 
+def test_show_text_prints_page_kinds_and_the_first_lines_of_each_exercise_page(session_factory, embedder):
+    with session_factory() as db:
+        science_chapter(db, make_book(db), embedder)
+        db.commit()
+    plain = "\n".join(exercise_map.run(session_factory, min_similarity=0.05))
+    assert "text of page" not in plain
+    shown = "\n".join(exercise_map.run(session_factory, min_similarity=0.05, show_text=True))
+    assert "page kinds: 2 content, 1 exercise" in shown and "exercise pages: 3" in shown
+    assert "text of page 3 [exercise]: Exercises 1. What is a cell" in shown
+
+
 # ---- retrieval ---------------------------------------------------------------------------------------
 
 @pytest.fixture()
