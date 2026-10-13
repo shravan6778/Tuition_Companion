@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from dataclasses import dataclass
 
+from app.assessment import mastery
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.doubts import tutor
@@ -117,6 +118,8 @@ def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assi
         answer_model=(answer.model or None) if answer else None,
     )
     db.add(doubt)
+    if best:  # the doubt event (mastery log) is written with the doubt itself: it feeds the "ask first" ordering of the next check
+        mastery.record_doubt(db, student.id, uuid.UUID(best), assignment.id if assignment else None)
     db.commit()
     db.refresh(doubt)
     return DoubtOutcome(doubt, result, answer)

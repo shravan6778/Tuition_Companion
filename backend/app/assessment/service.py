@@ -20,11 +20,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.assessment import checks
+from app.assessment import checks, mastery
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.llm import get_llm_provider
-from app.models import Assignment, AssignmentCheck, CheckQuestion, Concept, Doubt, Page, User
+from app.models import Assignment, AssignmentCheck, CheckQuestion, Concept, Page, User
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,17 @@ def _fill(db: Session, check: AssignmentCheck) -> None:
         db.commit()  # each question is kept as soon as it exists: a crash loses at most the one being written
 
 
+def _ask_first(db: Session, student: User, concept_ids: list[uuid.UUID]) -> list[str]:
+    """When the scope is bigger than the ceiling: concepts that tested weak first, then those flagged at risk, then those the
+    student asked about (most recent first)."""
+    state = mastery.current_state(db, student.id, concept_ids)
+    wanted = set(concept_ids)
+    weak = sorted((s for s in state.values() if s.status == mastery.WEAK), key=lambda s: s.score)
+    at_risk = [s for s in state.values() if s.status == mastery.AT_RISK]
+    doubted = [c for c in mastery.doubted_concept_ids(db, student.id) if c in wanted]
+    return [str(i) for i in dict.fromkeys([s.concept_id for s in weak] + [s.concept_id for s in at_risk] + doubted)]
+
+
 def start_check(db: Session, student: User, assignment: Assignment) -> AssignmentCheck:
     """Mark complete. Resumes the open check (retrying its failed questions) or opens a new one."""
     open_check = db.scalar(select(AssignmentCheck).where(
@@ -87,8 +98,7 @@ def start_check(db: Session, student: User, assignment: Assignment) -> Assignmen
             _fill(db, open_check)
         return open_check
     concept_ids = [str(ac.concept_id) for ac in assignment.concepts]
-    asked = [str(c) for c in db.scalars(select(Doubt.concept_id).where(Doubt.student_id == student.id, Doubt.concept_id.in_([ac.concept_id for ac in assignment.concepts])))]
-    plan = checks.plan_check(concept_ids, priority_ids=asked)
+    plan = checks.plan_check(concept_ids, priority_ids=_ask_first(db, student, [ac.concept_id for ac in assignment.concepts]))
     if not plan:
         raise HTTPException(409, "This assignment has no concepts to check yet")
     check = AssignmentCheck(student_id=student.id, assignment_id=assignment.id, assignment_title=assignment.title, status=OPEN)
@@ -129,6 +139,16 @@ def submit(db: Session, check: AssignmentCheck, answers: dict[uuid.UUID, Optiona
         graded.append(g)
     check.score = round(sum(1 for g in graded if g.correct) / len(graded), 4)
     check.status, check.submitted_at = SUBMITTED, datetime.now(timezone.utc)
-    db.commit()
+    per_concept: dict[uuid.UUID, tuple[int, int]] = {}
+    for q in check.questions:
+        if q.status == "ready" and q.concept_id is not None:
+            asked, right = per_concept.get(q.concept_id, (0, 0))
+            per_concept[q.concept_id] = (asked + 1, right + (1 if q.correct else 0))
+    try:  # the graded check and its mastery events are ONE transaction: a half-written result never reaches the mastery log
+        mastery.record_check(db, check.student_id, check.id, check.assignment_id, per_concept)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(check)
     return check

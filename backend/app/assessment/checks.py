@@ -77,9 +77,13 @@ def plan_check(concept_ids: Sequence[str], priority_ids: Sequence[str] = ()) -> 
         return []
     n = question_count(len(unique))
     if len(unique) > n:
-        first = [c for c in dict.fromkeys(priority_ids) if c in set(unique)]
-        chosen = (first + [c for c in unique if c not in set(first)])[:n]
-        chosen_set = set(chosen)
+        first = [c for c in dict.fromkeys(priority_ids) if c in set(unique)][:n]
+        rest = [c for c in unique if c not in set(first)]
+        need = n - len(first)
+        # The rest are SPREAD evenly through the scope, not taken from its start: a chapter check that only ever asked
+        # about the first ten concepts would never test the later pages (real-data finding, Oct 2026).
+        spread = [rest[int((i + 0.5) * len(rest) / need)] for i in range(need)] if need else []
+        chosen_set = set(first) | set(spread)
         return [c for c in unique if c in chosen_set]  # back into book order
     return [unique[i % len(unique)] for i in range(n)]
 

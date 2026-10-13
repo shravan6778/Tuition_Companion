@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.models import AssignmentCheck, CheckQuestion, Concept, Doubt, Page, Role
+from app.models import AssignmentCheck, CheckQuestion, Concept, MasteryEvent, Page, Role
 from tests.test_book_access import make_user
 from tests.test_phase3_step2 import assign, world  # noqa: F401  (world is a fixture)
 
@@ -86,16 +86,16 @@ def test_one_concept_still_gets_the_floor_of_two_questions_about_different_aspec
 def test_a_big_assignment_is_capped_and_the_concepts_the_student_asked_about_come_first(client, session_factory, world, llm):
     with session_factory() as db:
         page = db.scalars(select(Page).where(Page.content_text.like("Force is a push%"))).first()
-        for i in range(13):
+        for i in range(25):
             db.add(Concept(page_id=page.id, name=f"Extra {i}", description="an extra idea", position=10 + i))
         db.commit()
         extra = [str(c.id) for c in db.scalars(select(Concept).where(Concept.name.like("Extra %")).order_by(Concept.position))]
-        db.add(Doubt(student_id=world["student"].id, text="what is extra 12", status="grounded", concept_id=uuid.UUID(extra[12])))
+        db.add(MasteryEvent(student_id=world["student"].id, concept_id=uuid.UUID(extra[2]), concept_name="Extra 2", kind="doubt"))
         db.commit()
     a = assign(client, world, level="concept", chapter=None, concept_ids=extra)
     body = complete(client, world, a).json()
     names = [q["concept_name"] for q in body["questions"]]
-    assert len(names) == settings.check_max_questions == 10 and "Extra 12" in names  # the doubted concept made the cut although it is last
+    assert len(names) == settings.check_max_questions == 10 and "Extra 2" in names  # the doubted concept made the cut (an even spread alone would skip it)
 
 
 def test_marking_complete_again_resumes_the_same_check_without_new_model_calls(client, world, llm):

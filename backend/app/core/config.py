@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     check_min_questions: int = 2  # comprehension check floor: even one concept gets a real check
     check_max_questions: int = 10  # ceiling: a whole chapter is not an exhausting test
     weak_below: float = 0.6  # mastery under this is "weak"
+    propagate_max_depth: int = 2  # a weak concept flags its dependents this many prerequisite steps away (1 = only direct dependents)
     photo_min_words: int = 4  # OCR text shorter than this: ask the student to retake the photo (a real photographed doubt read as 8 words; short doubts must pass, the retrieval cut-off refuses noise)
     photo_page_words: int = 60  # OCR text at least this long is a whole page, not a doubt
     tutor_verify_below: float = 0.55  # guess: a doubt whose best similarity is under this still gets an answer, marked "auto-generated, please verify" (in-book doubts scored 0.585 at the 10th percentile; set from real output)

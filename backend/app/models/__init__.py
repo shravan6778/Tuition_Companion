@@ -6,12 +6,13 @@ from .content import (
 from .assignment import Assignment, AssignmentConcept, AssignmentLevel
 from .check import AssignmentCheck, CheckQuestion
 from .doubt import Doubt
+from .mastery import MasteryEvent
 from .links import ParentStudentLink
 from .room import Room, RoomMember, RoomType
 from .user import Role, User
 
 __all__ = [
-    "Assignment", "AssignmentCheck", "AssignmentConcept", "CheckQuestion", "AssignmentLevel", "Base", "Book", "Doubt", "Chapter", "ChapterRequest", "ChapterStatus", "Concept", "ConceptEdge", "ContentEmbedding", "CrossChapterEdge", "IndexStatus", "MatchFeedback", "Page",
+    "Assignment", "AssignmentCheck", "AssignmentConcept", "CheckQuestion", "MasteryEvent", "AssignmentLevel", "Base", "Book", "Doubt", "Chapter", "ChapterRequest", "ChapterStatus", "Concept", "ConceptEdge", "ContentEmbedding", "CrossChapterEdge", "IndexStatus", "MatchFeedback", "Page",
     "PageBand", "PageKind", "UploadDraft", "ParentStudentLink",
     "Role", "Room", "RoomMember", "RoomType", "User", "student_book",
 ]
