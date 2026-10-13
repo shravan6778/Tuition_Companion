@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     rate_front_pages_per_hour: int = 10  # each call costs one OCR + one LLM call
     rate_whole_book_plan_per_hour: int = 10
     rate_doubts_per_hour: int = 40  # each doubt costs one embedding call
+    rate_checks_per_hour: int = 10  # each new check costs up to CHECK_MAX_QUESTIONS model calls
     rate_doubt_photos_per_hour: int = 15  # each photo costs one OCR call (on top of the doubt's embedding call)
     max_doubt_photo_mb: int = 8  # a phone photo; larger is refused before any OCR is paid for
     # --- page matching (pipeline/fingerprint.py, pipeline/matching.py)
