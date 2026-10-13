@@ -5,13 +5,13 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.assignments import service
 from app.auth.dependencies import require_student, require_teacher
 from app.db.session import get_db
-from app.models import Assignment, Chapter, Concept
+from app.models import Assignment, Chapter, Concept, Doubt
 
 teacher_router = APIRouter(prefix="/teacher/assignments", tags=["assignments"], dependencies=[Depends(require_teacher)])
 student_router = APIRouter(prefix="/student/assignments", tags=["assignments"], dependencies=[Depends(require_student)])
@@ -114,7 +114,10 @@ def get_assignment(assignment_id: uuid.UUID, teacher=Depends(require_teacher), d
 
 @teacher_router.delete("/{assignment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_assignment(assignment_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
-    db.delete(service.get_teacher_assignment(db, teacher, assignment_id))
+    assignment = service.get_teacher_assignment(db, teacher, assignment_id)
+    # Students' doubt history outlives the assignment (done here, not left to the database, so SQLite tests agree with PostgreSQL).
+    db.execute(update(Doubt).where(Doubt.assignment_id == assignment.id).values(assignment_id=None))
+    db.delete(assignment)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

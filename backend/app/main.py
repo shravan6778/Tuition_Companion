@@ -11,6 +11,7 @@ from app.auth.supertokens_config import init_supertokens
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.core.logging import setup_logging
+from app.doubts.routes import router as doubt_router
 from app.parent.routes import router as parent_router
 from app.student.routes import router as student_router
 from app.teacher.routes import router as teacher_router
@@ -49,4 +50,5 @@ app.include_router(assignment_teacher_router)
 app.include_router(admin_router)
 app.include_router(student_router)
 app.include_router(assignment_student_router)
+app.include_router(doubt_router)
 app.include_router(parent_router)
