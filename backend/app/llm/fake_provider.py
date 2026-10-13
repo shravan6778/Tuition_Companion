@@ -39,6 +39,14 @@ class FakeLLMProvider:
         if user.startswith("STUDENT DOUBT\n"):  # calibration: a student's own words about the page
             body = user.split("PAGE:\n", 1)[-1].split()
             return json.dumps({"doubt": "I do not understand " + " ".join(body[:6])})
+        if user.startswith("TUTOR DOUBT\n"):  # an explanation built from the first shown page
+            m = re.search(r"\[P1\][^\n]*\n(.+?)(?:\n\n\[P|\nKEY CONCEPTS|\nREFRESHER|\Z)", user, flags=re.DOTALL)
+            if not m:
+                return json.dumps({"answer": "", "refresher": None, "used_sources": [], "cannot_answer": True})
+            words = m.group(1).split()[:30]
+            refresher = "Earlier idea: " + user.split("REFRESHER", 1)[1].split("\n- ", 1)[1].split(":", 1)[0] if "REFRESHER" in user else None
+            return json.dumps({"answer": "The page explains it like this: " + " ".join(words), "refresher": refresher,
+                               "used_sources": ["P1"], "cannot_answer": False})
         if user.startswith("CHECK QUESTION\n"):  # one multiple-choice question about one concept
             name = re.search(r"^CONCEPT: (.+)$", user, flags=re.MULTILINE)
             name = name.group(1) if name else "the idea"

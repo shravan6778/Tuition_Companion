@@ -122,7 +122,12 @@ def retrieve(db: Session, text: str, *, embedder, store, book_ids: Sequence[uuid
     if result.confidence >= threshold:
         result.status = GROUNDED
         result.concepts = [h for h in inside_concepts if h.similarity >= threshold]
-        result.pages = _load_pages(db, [h for h in inside_pages if h.similarity >= threshold], set(ids))
+        page_hits = [h for h in inside_pages if h.similarity >= threshold]
+        # A short question often matches a concept strongly while no whole page scores above the cut-off (a page
+        # embedding is diluted by everything else on it). The pages the best concepts are explained on are still the
+        # right evidence, so they join the page hits (read from PostgreSQL, same scope and tenancy checks).
+        page_hits += _concept_page_hits(db, result.concepts[:3], scope)
+        result.pages = _load_pages(db, page_hits, set(ids))
         result.prerequisites = _refresher(store, result.concepts, ids)
         if not result.pages and not result.concepts:  # the store named hits PostgreSQL does not stand behind
             result.status = NOT_IN_BOOK
@@ -132,11 +137,32 @@ def retrieve(db: Session, text: str, *, embedder, store, book_ids: Sequence[uuid
     return result
 
 
+def _concept_page_hits(db: Session, concepts: Sequence[ConceptHit], scope: Optional[Scope]) -> list[PageHit]:
+    """The pages the given concepts are explained on, carrying the concept's similarity. Only pages inside the scope."""
+    if not concepts:
+        return []
+    sims = {uuid.UUID(c.concept_id): c.similarity for c in concepts}
+    rows = db.execute(
+        select(Concept.id, Page.id, Page.page_number, Page.chapter_id, Chapter.book_id)
+        .join(Page, Page.id == Concept.page_id).join(Chapter, Chapter.id == Page.chapter_id)
+        .where(Concept.id.in_(list(sims)))
+    ).all()
+    hits = []
+    for concept_id, page_id, number, chapter_id, book_id in rows:
+        if scope is None or scope.has_page(str(page_id), str(chapter_id)):
+            hits.append(PageHit(str(page_id), number, str(chapter_id), str(book_id), sims[concept_id]))
+    return hits
+
+
 def _load_pages(db: Session, hits: list[PageHit], book_ids: set[str]) -> list[RetrievedPage]:
     """Page text comes from PostgreSQL, and only for ready chapters of the allowed books."""
     if not hits:
         return []
-    by_id = {uuid.UUID(h.page_id): h for h in hits}
+    by_id: dict[uuid.UUID, PageHit] = {}
+    for h in hits:  # the same page may arrive as a page hit and as a concept's page: keep its best similarity
+        key = uuid.UUID(h.page_id)
+        if key not in by_id or h.similarity > by_id[key].similarity:
+            by_id[key] = h
     rows = db.execute(
         select(Page, Chapter).join(Chapter, Chapter.id == Page.chapter_id)
         .where(Page.id.in_(list(by_id)), Chapter.status == ChapterStatus.READY)

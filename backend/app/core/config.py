@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     weak_below: float = 0.6  # mastery under this is "weak"
     photo_min_words: int = 4  # OCR text shorter than this: ask the student to retake the photo (a real photographed doubt read as 8 words; short doubts must pass, the retrieval cut-off refuses noise)
     photo_page_words: int = 60  # OCR text at least this long is a whole page, not a doubt
+    tutor_verify_below: float = 0.55  # guess: a doubt whose best similarity is under this still gets an answer, marked "auto-generated, please verify" (in-book doubts scored 0.585 at the 10th percentile; set from real output)
+    tutor_max_pages: int = 3  # pages the Tutor is shown, best first
+    tutor_page_chars: int = 3000  # per page, so one long page can't crowd out the others
 
 
 settings = Settings()

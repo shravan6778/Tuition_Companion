@@ -8,10 +8,16 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from dataclasses import dataclass
+
+from app.core.config import settings
+from app.core.errors import ProcessingError
+from app.doubts import tutor
 from app.doubts.retrieval import GROUNDED, NOT_IN_BOOK, OUTSIDE, UNAVAILABLE, RetrievalResult, Scope, retrieve, scope_for_concepts
 from app.embeddings import get_embedding_provider
 from app.graph_store import get_graph_store
-from app.models import Assignment, AssignmentLevel, Concept, Doubt, Page, User, student_book
+from app.llm import get_llm_provider
+from app.models import Assignment, AssignmentLevel, Chapter, ChapterStatus, Concept, Doubt, Page, User, student_book
 
 logger = logging.getLogger(__name__)
 
@@ -45,17 +51,59 @@ def _providers():
         return None, None
 
 
-def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assignment]) -> tuple[Doubt, RetrievalResult]:
+def _refresher_material(db: Session, result: RetrievalResult, book_ids: list[uuid.UUID]) -> list[tuple[str, str]]:
+    """(name, description) of the prerequisite concepts, read from PostgreSQL and only for ready chapters of the
+    student's own books (the store's answer is never taken on trust)."""
+    ids = [uuid.UUID(p.concept_id) for p in result.prerequisites]
+    if not ids or not book_ids:
+        return []
+    rows = db.execute(
+        select(Concept.id, Concept.name, Concept.description).join(Page, Page.id == Concept.page_id)
+        .join(Chapter, Chapter.id == Page.chapter_id)
+        .where(Concept.id.in_(ids), Chapter.book_id.in_(book_ids), Chapter.status == ChapterStatus.READY)
+    ).all()
+    by_id = {r[0]: (r[1], r[2] or "") for r in rows}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+@dataclass
+class DoubtOutcome:
+    doubt: Doubt
+    result: RetrievalResult
+    answer: Optional[tutor.TutorAnswer] = None
+
+
+def _explain(db: Session, text: str, result: RetrievalResult, book_ids: list[uuid.UUID]):
+    """-> (answer_status, TutorAnswer | None). Only ever called for a grounded result."""
+    pages = result.pages[: settings.tutor_max_pages]
+    if not pages:
+        return "failed", None
+    try:
+        answer = tutor.explain(get_llm_provider(), text, pages, result.concepts, _refresher_material(db, result, book_ids))
+    except (ProcessingError, RuntimeError):  # model down, misconfigured, or no valid grounded reply: show the pages, never a guess
+        logger.warning("Tutor could not answer", exc_info=True)
+        return "failed", None
+    return ("unanswered" if answer.cannot_answer else "answered"), answer
+
+
+def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assignment]) -> DoubtOutcome:
     scope = assignment_scope(db, assignment) if assignment is not None else None
     embedder, store = _providers()
-    result = retrieve(db, text, embedder=embedder, store=store, book_ids=linked_book_ids(db, student), scope=scope)
+    book_ids = linked_book_ids(db, student)
+    result = retrieve(db, text, embedder=embedder, store=store, book_ids=book_ids, scope=scope)
     best = result.concepts[0].concept_id if result.status == GROUNDED and result.concepts else None
+    answer_status, answer = ("none", None)
+    if result.status == GROUNDED:  # the ONLY status the Tutor is ever asked to answer
+        answer_status, answer = _explain(db, text, result, book_ids)
     doubt = Doubt(
         student_id=student.id, assignment_id=assignment.id if assignment else None, text=text, status=result.status,
         concept_id=uuid.UUID(best) if best else None, confidence=round(result.confidence, 4),
         created_at=datetime.now(timezone.utc),  # microsecond order, so history is stable on every database
+        answer_status=answer_status, answer=answer.answer if answer else None, refresher=answer.refresher if answer else None,
+        needs_review=answer_status == "answered" and result.confidence < settings.tutor_verify_below,
+        answer_model=(answer.model or None) if answer else None,
     )
     db.add(doubt)
     db.commit()
     db.refresh(doubt)
-    return doubt, result
+    return DoubtOutcome(doubt, result, answer)
