@@ -34,7 +34,7 @@ class ValidatedUpload:
     sha256: str
 
 
-def read_validated_upload(file: UploadFile, max_mb: int, pdf_only: bool = False) -> ValidatedUpload:
+def read_validated_upload(file: UploadFile, max_mb: int, pdf_only: bool = False, images_only: bool = False) -> ValidatedUpload:
     """Size limit, non-empty, and file TYPE BY CONTENT (never the filename or the client's MIME type)."""
     max_bytes = max_mb * 1024 * 1024
     data = file.file.read(max_bytes + 1)
@@ -43,10 +43,10 @@ def read_validated_upload(file: UploadFile, max_mb: int, pdf_only: bool = False)
     if len(data) > max_bytes:
         raise HTTPException(413, f"File is too large (max {max_mb} MB)")
     ext = detect_extension(data)
-    if ext is None or (pdf_only and ext != "pdf"):
+    if ext is None or (pdf_only and ext != "pdf") or (images_only and ext == "pdf"):
         raise HTTPException(
             415,
-            "Please upload a PDF file" if pdf_only else "Please upload a PDF, PNG or JPG file",
+            "Please upload a PDF file" if pdf_only else "Please upload a PNG or JPG photo" if images_only else "Please upload a PDF, PNG or JPG file",
         )
     return ValidatedUpload(data, ext, sha256_hex(data))
 

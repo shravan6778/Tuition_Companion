@@ -43,6 +43,19 @@ def assignment_scope(db: Session, assignment: Assignment) -> Scope:
     return Scope(chapter_ids=chapter_ids)
 
 
+def concept_doubt_text(db: Session, student: User, concept_id: uuid.UUID) -> Optional[str]:
+    """The doubt text for a concept the student picked from a photographed page. None when that concept is not in a
+    ready chapter of one of the student's linked books (the route answers 404: never reveals another book's concepts)."""
+    row = db.execute(
+        select(Concept.name, Concept.description).join(Page, Page.id == Concept.page_id).join(Chapter, Chapter.id == Page.chapter_id)
+        .where(Concept.id == concept_id, Chapter.status == ChapterStatus.READY, Chapter.book_id.in_(linked_book_ids(db, student)))
+    ).first()
+    if row is None:
+        return None
+    name, description = row
+    return " ".join(f"I don't understand {name}. {description or ''}".split())[:1000]
+
+
 def _providers():
     try:
         return get_embedding_provider(), get_graph_store()
