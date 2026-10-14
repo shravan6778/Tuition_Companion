@@ -102,6 +102,19 @@ class Settings(BaseSettings):
     tutor_verify_below: float = 0.55  # guess: a doubt whose best similarity is under this still gets an answer, marked "auto-generated, please verify" (in-book doubts scored 0.585 at the 10th percentile; set from real output)
     tutor_max_pages: int = 3  # pages the Tutor is shown, best first
     tutor_page_chars: int = 3000  # per page, so one long page can't crowd out the others
+    # --- Phase 4 (quizzes, hybrid grading, weak-area practice)
+    quiz_short_questions: int = 10
+    quiz_medium_questions: int = 20
+    quiz_long_questions: int = 30
+    quiz_practice_questions: int = 10
+    quiz_recall_share: float = 0.50
+    quiz_application_share: float = 0.30
+    quiz_cross_concept_share: float = 0.20
+    quiz_weak_share: float = 0.60
+    quiz_at_risk_share: float = 0.20
+    quiz_revision_share: float = 0.20
+    quiz_short_answer_pass_score: float = 0.80  # LLM grader score >= this counts as correct for mastery
+    rate_quizzes_per_hour: int = 10
 
 
 settings = Settings()

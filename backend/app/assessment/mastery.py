@@ -21,10 +21,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import Chapter, ChapterStatus, Concept, ConceptEdge, CrossChapterEdge, MasteryEvent, Page
 
-CHECK, DOUBT, PROPAGATED = "check", "doubt", "propagated"
+CHECK, QUIZ, DOUBT, PROPAGATED = "check", "quiz", "doubt", "propagated"
+MEASURED = (CHECK, QUIZ)
 WEAK, OK, AT_RISK = "weak", "ok", "at_risk"
 MAX_DEPENDENTS = 200  # one weak concept never fans out beyond this, however large a book's graph is
-
 
 @dataclass
 class ConceptState:
@@ -90,7 +90,7 @@ def dependents(db: Session, weak_id: uuid.UUID, max_depth: Optional[int] = None)
 
 
 def current_state(db: Session, student_id: uuid.UUID, concept_ids: Optional[Iterable[uuid.UUID]] = None) -> dict[uuid.UUID, ConceptState]:
-    query = select(MasteryEvent).where(MasteryEvent.student_id == student_id, MasteryEvent.kind.in_([CHECK, PROPAGATED]),
+    query = select(MasteryEvent).where(MasteryEvent.student_id == student_id, MasteryEvent.kind.in_([CHECK, QUIZ, PROPAGATED]),
                                        MasteryEvent.concept_id.is_not(None)).order_by(MasteryEvent.id)
     if concept_ids is not None:
         ids = list(concept_ids)
@@ -103,10 +103,10 @@ def current_state(db: Session, student_id: uuid.UUID, concept_ids: Optional[Iter
         if s is None:
             s = state[e.concept_id] = ConceptState(e.concept_id, e.concept_name, OK)
         s.name = e.concept_name
-        if e.kind == CHECK:
+        if e.kind in MEASURED:
             s.score, s.asked, s.correct, s.last_checked = e.score, e.asked, e.correct, e.created_at
             s.status = WEAK if e.score < settings.weak_below else OK
-            s.reason = s.flagged_by = None  # a measured check clears an earlier flag
+            s.reason = s.flagged_by = None  # a measured check or quiz clears an earlier flag
         else:
             s.status, s.reason, s.flagged_by = AT_RISK, e.reason, e.source_concept_id
     return state
@@ -129,9 +129,12 @@ def record_doubt(db: Session, student_id: uuid.UUID, concept_id: uuid.UUID, assi
         db.add(MasteryEvent(student_id=student_id, concept_id=concept_id, concept_name=concept.name[:300], kind=DOUBT, assignment_id=assignment_id))
 
 
-def record_check(db: Session, student_id: uuid.UUID, check_id: uuid.UUID, assignment_id: Optional[uuid.UUID],
-                 results: dict[uuid.UUID, tuple[int, int]]) -> list[MasteryEvent]:
-    """results: concept -> (asked, correct). Adds the events and flushes; the CALLER commits (one transaction with the check)."""
+def record_check(db: Session, student_id: uuid.UUID, check_id: Optional[uuid.UUID], assignment_id: Optional[uuid.UUID],
+                 results: dict[uuid.UUID, tuple[int, int]], *, kind: str = CHECK,
+                 quiz_id: Optional[uuid.UUID] = None) -> list[MasteryEvent]:
+    """results: concept -> (asked, correct). Adds the events and flushes; the CALLER commits (one transaction with the check/quiz)."""
+    if kind not in MEASURED:
+        raise ValueError(f"Unsupported measured event kind: {kind}")
     added: list[MasteryEvent] = []
     names: dict[uuid.UUID, str] = {}
     weak: list[uuid.UUID] = []
@@ -141,15 +144,15 @@ def record_check(db: Session, student_id: uuid.UUID, check_id: uuid.UUID, assign
             continue
         names[concept_id] = concept.name
         score = round(correct / asked, 4)
-        added.append(MasteryEvent(student_id=student_id, concept_id=concept_id, concept_name=concept.name[:300], kind=CHECK, score=score,
-                                  asked=asked, correct=correct, assignment_id=assignment_id, check_id=check_id))
+        added.append(MasteryEvent(student_id=student_id, concept_id=concept_id, concept_name=concept.name[:300], kind=kind, score=score,
+                                  asked=asked, correct=correct, assignment_id=assignment_id, check_id=check_id, quiz_id=quiz_id))
         if score < settings.weak_below:
             weak.append(concept_id)
     db.add_all(added)
     db.flush()
     flagged: set[tuple[uuid.UUID, uuid.UUID]] = set()
     for weak_id in weak:
-        deps = [d for d in dependents(db, weak_id) if d.concept_id not in names]  # measured in this very check: fresher evidence
+        deps = [d for d in dependents(db, weak_id) if d.concept_id not in names]  # measured in this very check/quiz: fresher evidence
         state = current_state(db, student_id, [d.concept_id for d in deps])
         for d in deps:
             s = state.get(d.concept_id)
@@ -157,7 +160,14 @@ def record_check(db: Session, student_id: uuid.UUID, check_id: uuid.UUID, assign
                 continue
             flagged.add((d.concept_id, weak_id))
             added.append(MasteryEvent(student_id=student_id, concept_id=d.concept_id, concept_name=d.name[:300], kind=PROPAGATED,
-                                      assignment_id=assignment_id, check_id=check_id, reason=reason_text(d.chain), source_concept_id=weak_id))
+                                      assignment_id=assignment_id, check_id=check_id, quiz_id=quiz_id,
+                                      reason=reason_text(d.chain), source_concept_id=weak_id))
             db.add(added[-1])
     db.flush()
     return added
+
+
+def record_quiz(db: Session, student_id: uuid.UUID, quiz_id: uuid.UUID, assignment_id: Optional[uuid.UUID],
+                results: dict[uuid.UUID, tuple[int, int]]) -> list[MasteryEvent]:
+    """Same unified mastery log and weak-area propagation as `record_check`, recorded with `kind='quiz'`."""
+    return record_check(db, student_id, None, assignment_id, results, kind=QUIZ, quiz_id=quiz_id)

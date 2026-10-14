@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.assignments import service
 from app.auth.dependencies import require_student, require_teacher
 from app.db.session import get_db
-from app.models import Assignment, AssignmentCheck, Chapter, Concept, Doubt
+from app.models import Assignment, AssignmentCheck, Chapter, Concept, Doubt, Quiz
 
 teacher_router = APIRouter(prefix="/teacher/assignments", tags=["assignments"], dependencies=[Depends(require_teacher)])
 student_router = APIRouter(prefix="/student/assignments", tags=["assignments"], dependencies=[Depends(require_student)])
@@ -118,6 +118,7 @@ def delete_assignment(assignment_id: uuid.UUID, teacher=Depends(require_teacher)
     # Students' doubt history outlives the assignment (done here, not left to the database, so SQLite tests agree with PostgreSQL).
     db.execute(update(Doubt).where(Doubt.assignment_id == assignment.id).values(assignment_id=None))
     db.execute(update(AssignmentCheck).where(AssignmentCheck.assignment_id == assignment.id).values(assignment_id=None))  # so is their check record
+    db.execute(update(Quiz).where(Quiz.assignment_id == assignment.id).values(assignment_id=None))
     db.delete(assignment)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
