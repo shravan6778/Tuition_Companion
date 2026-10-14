@@ -47,6 +47,10 @@ class FakeLLMProvider:
             refresher = "Earlier idea: " + user.split("REFRESHER", 1)[1].split("\n- ", 1)[1].split(":", 1)[0] if "REFRESHER" in user else None
             return json.dumps({"answer": "The page explains it like this: " + " ".join(words), "refresher": refresher,
                                "used_sources": ["P1"], "cannot_answer": False})
+        if user.startswith("QUIZ QUESTION (MCQ)"):
+            return self._quiz_mcq(user)
+        if user.startswith("QUIZ QUESTION (SHORT_ANSWER)"):
+            return self._quiz_short_answer(user)
         if user.startswith("CHECK QUESTION\n"):  # one multiple-choice question about one concept
             name = re.search(r"^CONCEPT: (.+)$", user, flags=re.MULTILINE)
             name = name.group(1) if name else "the idea"
@@ -74,3 +78,46 @@ class FakeLLMProvider:
             for i, name in enumerate(lines)
         ]
         return json.dumps({"concepts": concepts})
+    def _quiz_mcq(self, user: str) -> str:
+        qtype = (re.search(r"^QUESTION TYPE:\s*(.+)$", user, re.M) or [None, "RECALL"])[1].strip().lower()
+        name = (re.search(r"^PRIMARY CONCEPT:\s*(.+)$", user, re.M) or [None, "this concept"])[1].strip()
+        desc = (re.search(r"^PRIMARY DESCRIPTION:\s*(.+)$", user, re.M) or [None, ""])[1].strip()
+        rel = (re.search(r"^RELATED CONCEPT:\s*(.+)$", user, re.M) or [None, ""])[1].strip()
+        page = user.partition("PRIMARY PAGE")[2].partition("\n")[2].partition("\n\n")[0].strip()
+        asked = len(re.findall(r"^- ", user.partition("QUESTIONS ALREADY ASKED:\n")[2], re.M))
+        right = (desc or " ".join(page.split()[:12]) or f"The textbook idea of {name}")[:180]
+        if qtype == "cross_concept" and rel:
+            stem = f"How does {name} connect with {rel} according to the page?" if not asked else f"Which statement links {name} and {rel}?"
+        elif qtype == "application":
+            stem = f"In a practical example from the page, how is {name} applied?" if not asked else f"Which situation best illustrates {name}?"
+        else:
+            stem = f"According to the page, which statement best describes {name}?" if not asked else f"What key fact does the page state about {name}?"
+        return json.dumps({
+            "question": stem,
+            "options": [
+                right,
+                f"{name} is unrelated to the chapter topic",
+                f"{name} only applies outside this subject",
+                f"The page states the opposite of {name}",
+            ],
+            "correct_index": 0,
+            "explanation": f"The page explains {name} as: {right}.",
+        })
+
+    def _quiz_short_answer(self, user: str) -> str:
+        qtype = (re.search(r"^QUESTION TYPE:\s*(.+)$", user, re.M) or [None, "CROSS_CONCEPT"])[1].strip().lower()
+        name = (re.search(r"^PRIMARY CONCEPT:\s*(.+)$", user, re.M) or [None, "this concept"])[1].strip()
+        desc = (re.search(r"^PRIMARY DESCRIPTION:\s*(.+)$", user, re.M) or [None, ""])[1].strip()
+        rel = (re.search(r"^RELATED CONCEPT:\s*(.+)$", user, re.M) or [None, ""])[1].strip()
+        rel_desc = (re.search(r"^RELATED DESCRIPTION:\s*(.+)$", user, re.M) or [None, ""])[1].strip()
+        if qtype == "cross_concept" and rel:
+            q = f"Explain how {name} and {rel} are related based on the textbook pages."
+            expected = f"{name} ({desc or 'primary concept'}) connects to {rel} ({rel_desc or 'related concept'}) as described on the pages."
+        else:
+            q = f"Explain how {name} works using an example or principle from the page."
+            expected = desc or f"{name} operates according to the principles stated on the textbook page."
+        return json.dumps({
+            "question": q[:450],
+            "expected_answer": expected[:550],
+            "explanation": f"Grounded in the textbook section on {name}" + (f" and {rel}." if rel else "."),
+        })
