@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.doubts import service
 from app.doubts.retrieval import GROUNDED, RetrievalResult, concepts_on_page, retrieve
-from app.models import Assignment, Concept, User
+from app.models import Assignment, Chapter, Concept, User
 from app.ocr import get_ocr_provider
 
 logger = logging.getLogger(__name__)
@@ -49,10 +49,10 @@ class PagePick:
     concepts: list[Concept] = field(default_factory=list)
 
 
-def match_page(db: Session, student: User, text: str, assignment: Optional[Assignment]) -> PagePick:
+def match_page(db: Session, student: User, text: str, assignment: Optional[Assignment], chapter: Optional[Chapter] = None) -> PagePick:
     """A whole photographed page: find the page in the student's books and list the concepts on it that the student can pick.
     Same scope and tenancy rules as any doubt (the student's own linked books; the assignment's scope when there is one)."""
-    scope = service.assignment_scope(db, assignment) if assignment is not None else None
+    scope = service.assignment_scope(db, assignment) if assignment is not None else service.chapter_scope(chapter) if chapter is not None else None
     embedder, store = service._providers()
     result = retrieve(db, text, embedder=embedder, store=store, book_ids=service.linked_book_ids(db, student), scope=scope)
     if result.status != GROUNDED or not result.pages:

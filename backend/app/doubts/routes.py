@@ -13,9 +13,9 @@ from app.core.config import settings
 from app.core.ratelimit import limiter
 from app.db.session import get_db
 from app.content_library.upload import read_validated_upload
-from app.doubts import photo, service
+from app.doubts import browse as browse_module, photo, service
 from app.doubts.query import DOUBT, PAGE, RETAKE_MESSAGE, TOO_SHORT, classify_doubt_text
-from app.doubts.retrieval import GROUNDED, NOT_IN_BOOK
+from app.doubts.retrieval import GROUNDED, NOT_IN_BOOK, OUTSIDE
 from app.models import Doubt
 
 router = APIRouter(prefix="/student/doubts", tags=["doubts"], dependencies=[Depends(require_student)])
@@ -28,9 +28,13 @@ class DoubtIn(BaseModel):
     # The concept a student picked from a photographed whole page (step 4). The doubt text is then built from the concept
     # and `text` is ignored.
     concept_id: uuid.UUID | None = None
+    # Standalone "Ask a Doubt" (step 7): narrow the search to one chapter of a linked book. Not combined with an assignment.
+    chapter_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def has_a_doubt(self):
+        if self.assignment_id is not None and self.chapter_id is not None:
+            raise ValueError("Send an assignment or a chapter, not both")
         self.text = " ".join(self.text.split())
         if not self.text and self.concept_id is None:
             raise ValueError("Write your doubt first")
@@ -80,6 +84,7 @@ class SourceOut(BaseModel):
 class DoubtOut(BaseModel):
     id: uuid.UUID
     assignment_id: uuid.UUID | None
+    chapter_id: uuid.UUID | None = None  # the chapter the student narrowed a standalone doubt to
     status: str  # grounded | outside_assignment | not_in_book | unavailable
     message: str
     confidence: float
@@ -115,11 +120,16 @@ ANSWER_MESSAGES = {
 
 def _out(outcome: service.DoubtOutcome, book_id: uuid.UUID | None) -> DoubtOut:
     doubt, result, answer = outcome.doubt, outcome.result, outcome.answer
+    if outcome.chapter is not None:
+        book_id = outcome.chapter.book_id
+    message = ANSWER_MESSAGES.get(doubt.answer_status) or (service.CHAPTER_OUTSIDE if outcome.chapter is not None and result.status == OUTSIDE
+                                                           else service.MESSAGES[result.status])
     request = None
     if result.status == NOT_IN_BOOK and book_id is not None:
         request = RequestChapterOut(book_id=book_id, path=f"/student/books/{book_id}/chapter-requests")
     return DoubtOut(
-        id=doubt.id, assignment_id=doubt.assignment_id, status=result.status, message=ANSWER_MESSAGES.get(doubt.answer_status) or service.MESSAGES[result.status],
+        id=doubt.id, assignment_id=doubt.assignment_id, chapter_id=outcome.chapter.id if outcome.chapter is not None else None,
+        status=result.status, message=message,
         confidence=round(result.confidence, 3), threshold=result.threshold,
         pages=[PageOut(page_id=p.page_id, page_number=p.page_number, chapter_id=p.chapter_id, chapter_title=p.chapter_title,
                        book_id=p.book_id, similarity=round(p.similarity, 3), excerpt=" ".join(p.text.split())[:EXCERPT_CHARS])
@@ -139,13 +149,18 @@ def _out(outcome: service.DoubtOutcome, book_id: uuid.UUID | None) -> DoubtOut:
 def ask(body: DoubtIn, student=Depends(require_student), db: Session = Depends(get_db)):
     # The assignment is checked first (404 when it isn't this student's), so a probe can't use the rate limit to learn anything.
     assignment = assignments.get_student_assignment(db, student, body.assignment_id) if body.assignment_id else None
+    chapter = None
+    if body.chapter_id is not None:
+        chapter = service.get_ready_chapter(db, student, body.chapter_id)
+        if chapter is None:
+            raise HTTPException(404, "Chapter not found")
     text = body.text
     if body.concept_id is not None:
         text = service.concept_doubt_text(db, student, body.concept_id)
         if text is None:
             raise HTTPException(404, "Concept not found")
     limiter.check("doubt", str(student.id), settings.rate_doubts_per_hour, 3600)
-    return _out(service.raise_doubt(db, student, text, assignment), assignment.book_id if assignment else None)
+    return _out(service.raise_doubt(db, student, text, assignment, chapter), assignment.book_id if assignment else None)
 
 
 class PickConceptOut(BaseModel):
@@ -180,10 +195,15 @@ UNREADABLE_MESSAGE = "We couldn't read that photo right now. Please try again in
 
 @router.post("/photo", response_model=DoubtPhotoOut)
 def ask_by_photo(file: UploadFile = File(...), assignment_id: uuid.UUID | None = Form(default=None),
-                 student=Depends(require_student), db: Session = Depends(get_db)):
+                 chapter_id: uuid.UUID | None = Form(default=None), student=Depends(require_student), db: Session = Depends(get_db)):
     """A photographed doubt. Order matters: the assignment is checked first (404), then the file by CONTENT and size, then the
     per-student limits, and only then is one OCR call paid for. The photo is never stored."""
+    if assignment_id is not None and chapter_id is not None:
+        raise HTTPException(422, "Send an assignment or a chapter, not both")
     assignment = assignments.get_student_assignment(db, student, assignment_id) if assignment_id else None
+    chapter = service.get_ready_chapter(db, student, chapter_id) if chapter_id else None
+    if chapter_id and chapter is None:
+        raise HTTPException(404, "Chapter not found")
     upload = read_validated_upload(file, settings.max_doubt_photo_mb, images_only=True)
     limiter.check("doubt_photo", str(student.id), settings.rate_doubt_photos_per_hour, 3600)
     try:
@@ -195,12 +215,12 @@ def ask_by_photo(file: UploadFile = File(...), assignment_id: uuid.UUID | None =
     if q.kind == TOO_SHORT:
         return DoubtPhotoOut(kind=TOO_SHORT, words=q.words, text_read=shown, message=RETAKE_MESSAGE)
     limiter.check("doubt", str(student.id), settings.rate_doubts_per_hour, 3600)
-    book_id = assignment.book_id if assignment else None
+    book_id = assignment.book_id if assignment else chapter.book_id if chapter else None
     if q.kind == DOUBT:
-        outcome = service.raise_doubt(db, student, q.text[: photo.TEXT_CAP], assignment)
+        outcome = service.raise_doubt(db, student, q.text[: photo.TEXT_CAP], assignment, chapter)
         return DoubtPhotoOut(kind=DOUBT, words=q.words, text_read=shown, message="Here is what we found for your photo.",
                              doubt=_out(outcome, book_id))
-    pick = photo.match_page(db, student, q.text, assignment)
+    pick = photo.match_page(db, student, q.text, assignment, chapter)
     status = pick.result.status
     if pick.page_id is None or not pick.concepts:
         message = service.MESSAGES[status] if status != GROUNDED else service.MESSAGES["outside_assignment"]
@@ -222,3 +242,31 @@ def my_doubts(assignment_id: uuid.UUID | None = None, student=Depends(require_st
         query = query.where(Doubt.assignment_id == assignment_id)
     return [DoubtHistoryOut(id=d.id, assignment_id=d.assignment_id, text=d.text, status=d.status, created_at=d.created_at)
             for d in db.scalars(query.order_by(Doubt.created_at.desc()).limit(50))]
+
+
+# ---- standalone "Ask a Doubt": what the student can browse (step 7) ------------------------------------------------
+
+class BrowseChapterOut(BaseModel):
+    id: uuid.UUID
+    number: int
+    title: str
+
+
+class BrowseBookOut(BaseModel):
+    id: uuid.UUID
+    label: str
+    chapters: list[BrowseChapterOut]  # ready chapters only; send one as POST /student/doubts {chapter_id}
+
+
+class BrowseSubjectOut(BaseModel):
+    subject: str
+    books: list[BrowseBookOut]
+
+
+@router.get("/browse", response_model=list[BrowseSubjectOut])
+def browse(student=Depends(require_student), db: Session = Depends(get_db)):
+    """Subject -> book -> chapter over every book this student has linked (ready chapters only). A doubt asked with no
+    `chapter_id` searches all of these at once."""
+    return [BrowseSubjectOut(subject=s.subject, books=[BrowseBookOut(id=b.id, label=b.label, chapters=[
+        BrowseChapterOut(id=c.id, number=c.number, title=c.title) for c in b.chapters]) for b in s.books])
+        for s in browse_module.browse(db, student)]

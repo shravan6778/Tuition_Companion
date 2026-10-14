@@ -30,6 +30,9 @@ MESSAGES = {
 }
 
 
+CHAPTER_OUTSIDE = "That isn't in the chapter you picked, but your books do cover it elsewhere. Have a look at where, or ask again without choosing a chapter."
+
+
 def linked_book_ids(db: Session, student: User) -> list[uuid.UUID]:
     return list(db.scalars(select(student_book.c.book_id).where(student_book.c.student_id == student.id)))
 
@@ -42,6 +45,18 @@ def assignment_scope(db: Session, assignment: Assignment) -> Scope:
         return scope_for_concepts(db, concepts)
     chapter_ids = {str(db.get(Page, c.page_id).chapter_id) for c in concepts}
     return Scope(chapter_ids=chapter_ids)
+
+
+def chapter_scope(chapter: Chapter) -> Scope:
+    """Standalone "Ask a Doubt" with a chosen chapter: the search is narrowed to that one chapter."""
+    return Scope(chapter_ids={str(chapter.id)})
+
+
+def get_ready_chapter(db: Session, student: User, chapter_id: uuid.UUID) -> Optional[Chapter]:
+    """A READY chapter of a book this student has linked, else None (the route answers 404, so a chapter of an unlinked or
+    another teacher's book, or one still processing, is indistinguishable from one that doesn't exist)."""
+    return db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.status == ChapterStatus.READY,
+                                           Chapter.book_id.in_(linked_book_ids(db, student))))
 
 
 def concept_doubt_text(db: Session, student: User, concept_id: uuid.UUID) -> Optional[str]:
@@ -85,6 +100,7 @@ class DoubtOutcome:
     doubt: Doubt
     result: RetrievalResult
     answer: Optional[tutor.TutorAnswer] = None
+    chapter: Optional[Chapter] = None  # the chapter a standalone doubt was narrowed to
 
 
 def _explain(db: Session, text: str, result: RetrievalResult, book_ids: list[uuid.UUID]):
@@ -100,8 +116,11 @@ def _explain(db: Session, text: str, result: RetrievalResult, book_ids: list[uui
     return ("unanswered" if answer.cannot_answer else "answered"), answer
 
 
-def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assignment]) -> DoubtOutcome:
-    scope = assignment_scope(db, assignment) if assignment is not None else None
+def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assignment], chapter: Optional[Chapter] = None) -> DoubtOutcome:
+    """A doubt is scoped by its assignment, by a chosen chapter (standalone "Ask a Doubt"), or not at all (every linked book)."""
+    if assignment is not None and chapter is not None:
+        raise ValueError("a doubt has an assignment or a chapter, not both")
+    scope = assignment_scope(db, assignment) if assignment is not None else chapter_scope(chapter) if chapter is not None else None
     embedder, store = _providers()
     book_ids = linked_book_ids(db, student)
     result = retrieve(db, text, embedder=embedder, store=store, book_ids=book_ids, scope=scope)
@@ -122,4 +141,4 @@ def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assi
         mastery.record_doubt(db, student.id, uuid.UUID(best), assignment.id if assignment else None)
     db.commit()
     db.refresh(doubt)
-    return DoubtOutcome(doubt, result, answer)
+    return DoubtOutcome(doubt, result, answer, chapter)
