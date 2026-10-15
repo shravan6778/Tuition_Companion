@@ -1,17 +1,20 @@
 """Teacher-facing student analytics, session logs, and personalization briefing routes (Phase 5 & 6).
 
-  Step 1: GET /teacher/students/{student_id}/trends"""
+  Step 1: GET  /teacher/students/{student_id}/trends
+  Step 2: POST /teacher/students/{student_id}/sessions
+          GET  /teacher/students/{student_id}/sessions"""
 import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.assessment import trends
 from app.auth.dependencies import require_teacher
 from app.db.session import get_db
+from app.teacher import sessions as session_service
 
 router = APIRouter(prefix="/teacher/students", tags=["teacher-students"], dependencies=[Depends(require_teacher)])
 
@@ -76,6 +79,24 @@ class StudentTrendsOut(BaseModel):
     concepts: list[ConceptTrendOut] = []
 
 
+class SessionLogCreateIn(BaseModel):
+    notes: str = Field(min_length=1, max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    session_date: Optional[date] = None
+
+
+class SessionLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    student_id: uuid.UUID
+    teacher_id: uuid.UUID
+    session_date: date
+    notes: str
+    tags: list[str] = []
+    created_at: datetime
+
+
 @router.get("/{student_id}/trends", response_model=StudentTrendsOut)
 def get_student_trends(
     student_id: uuid.UUID,
@@ -121,3 +142,32 @@ def get_student_trends(
         ],
         concepts=[ConceptTrendOut(**c.__dict__) for c in report.concepts],
     )
+
+
+@router.post("/{student_id}/sessions", response_model=SessionLogOut, status_code=status.HTTP_201_CREATED)
+def create_student_session_log(
+    student_id: uuid.UUID,
+    body: SessionLogCreateIn,
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    entry = session_service.create_session_log(
+        db,
+        teacher,
+        student_id,
+        notes=body.notes,
+        tags=body.tags,
+        session_date=body.session_date,
+    )
+    return SessionLogOut.model_validate(entry)
+
+
+@router.get("/{student_id}/sessions", response_model=list[SessionLogOut])
+def list_student_session_logs(
+    student_id: uuid.UUID,
+    limit: int = Query(default=50, ge=1, le=100),
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    rows = session_service.list_session_logs(db, teacher, student_id, limit=limit)
+    return [SessionLogOut.model_validate(r) for r in rows]
