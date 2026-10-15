@@ -115,7 +115,12 @@ class Settings(BaseSettings):
     quiz_revision_share: float = 0.20
     quiz_short_answer_pass_score: float = 0.80  # LLM grader score >= this counts as correct for mastery
     rate_quizzes_per_hour: int = 10
-
+    # --- Phase 5 & 6 (rolling-window mastery, trends, session logs, personalization briefing)
+    mastery_rolling_window: int = 3  # number of most recent measured events (check/quiz) per concept
+    mastery_rolling_weights: tuple[float, float, float] = (0.50, 0.30, 0.20)  # (latest, previous, oldest)
+    trend_weeks: int = 4  # weekly buckets returned by GET /teacher/students/{id}/trends
+    briefing_cache_ttl_s: int = 300  # 5-minute strict TTL so page reloads don't re-bill the LLM
+    rate_briefings_per_hour: int = 30
 
 settings = Settings()
 

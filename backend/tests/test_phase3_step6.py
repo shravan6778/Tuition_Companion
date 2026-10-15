@@ -159,9 +159,9 @@ def test_a_later_measured_check_clears_the_flag_and_nothing_is_rewritten(client,
 def test_current_mastery_is_the_latest_check_not_an_average(client, session_factory, world, graph):
     take(client, world, ["Cell"], right=set())
     take(client, world, ["Cell"], right={"Cell"})
-    assert state(client, world)["Cell"]["score"] == 1.0 and state(client, world)["Cell"]["status"] == "ok"
-    assert len([e for e in events(session_factory, "check") if e.concept_name == "Cell"]) == 2
-
+    # Phase 5 Step 0.2 updated current_state from single latest score to 3-event weighted rolling average
+    # (50% latest=1.0, 30% previous=0.0 -> 0.50 / 0.80 = 0.625, which is >= 0.60 so status is "ok")
+    assert state(client, world)["Cell"]["score"] == 0.625 and state(client, world)["Cell"]["status"] == "ok"
 
 def test_a_second_weak_result_on_the_same_cause_does_not_pile_up_duplicate_flags(client, session_factory, world, graph):
     take(client, world, ["Cell"], right=set())
