@@ -51,6 +51,8 @@ class FakeLLMProvider:
             return self._quiz_mcq(user)
         if user.startswith("QUIZ QUESTION (SHORT_ANSWER)"):
             return self._quiz_short_answer(user)
+        if user.startswith("SHORT ANSWER GRADING\n"):
+            return self._grade_short_answer(user)
         if user.startswith("CHECK QUESTION\n"):  # one multiple-choice question about one concept
             name = re.search(r"^CONCEPT: (.+)$", user, flags=re.MULTILINE)
             name = name.group(1) if name else "the idea"
@@ -121,3 +123,22 @@ class FakeLLMProvider:
             "expected_answer": expected[:550],
             "explanation": f"Grounded in the textbook section on {name}" + (f" and {rel}." if rel else "."),
         })
+        
+    def _grade_short_answer(self, user: str) -> str:
+        expected = (re.search(r"^EXPECTED ANSWER:\s*(.+)$", user, re.M) or [None, ""])[1].strip().lower()
+        student = (re.search(r"^STUDENT ANSWER:\s*(.+)$", user, re.M) or [None, ""])[1].strip().lower()
+        exp_words = {w for w in re.findall(r"[a-z0-9]+", expected) if len(w) > 3}
+        stu_words = {w for w in re.findall(r"[a-z0-9]+", student) if len(w) > 3}
+        if not stu_words or "wrong" in student or "idk" in student:
+            return json.dumps({
+                "score": 0.0,
+                "feedback": "The response does not state the key concept described in the textbook.",
+            })
+        overlap = len(exp_words & stu_words) / max(1, min(len(exp_words), 4))
+        score = round(min(1.0, max(0.85 if overlap >= 0.4 else 0.3, overlap)), 2)
+        feedback = (
+            "Good explanation covering the key textbook points."
+            if score >= 0.8
+            else "Partially mentions the topic but misses key details from the expected answer."
+        )
+        return json.dumps({"score": score, "feedback": feedback})

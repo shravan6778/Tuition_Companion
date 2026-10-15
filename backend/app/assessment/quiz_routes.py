@@ -1,4 +1,4 @@
-"""Teacher and Student Quiz routes (Phase 4 Step 2).
+"""Teacher and Student Quiz routes (Phase 4 Steps 2–5).
 
     POST   /teacher/quizzes/generate          generate a full test for a chapter or concept list (10/20/30 questions)
     POST   /teacher/quizzes/{id}/assign       link a generated quiz to a room, student, or existing assignment
@@ -6,7 +6,9 @@
     GET    /teacher/quizzes/{id}              view a quiz (includes answer keys and explanations for teacher review)
     DELETE /teacher/quizzes/{id}              delete a teacher quiz
     GET    /student/quizzes                   list quizzes visible to this student (assigned teacher tests + own practice)
-    GET    /student/quizzes/{id}              student view of a quiz (NEVER includes answer keys before submission)"""
+    GET    /student/quizzes/{id}              student view of a quiz (NEVER includes answer keys before submission)
+    POST   /student/quizzes/{id}/submit       hybrid grade (MCQ in code + short-answer via LLM) and update unified mastery
+    POST   /student/practice/generate         student self-triggered practice quiz weighted 60/20/20 toward weak/at-risk concepts"""
 import uuid
 from datetime import date, datetime
 from typing import Literal, Optional
@@ -16,12 +18,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.assessment import quiz_service
+from app.assessment import mastery, quiz_service
+from app.assessment.routes import AtRiskOut, ConceptResultOut
 from app.auth.dependencies import require_student, require_teacher
 from app.core.config import settings
 from app.core.ratelimit import limiter
 from app.db.session import get_db
-from app.models import Concept, Quiz, QuizResponse
+from app.models import Concept, MasteryEvent, Quiz, QuizResponse
 
 teacher_quiz_router = APIRouter(prefix="/teacher/quizzes", tags=["quizzes"], dependencies=[Depends(require_teacher)])
 student_quiz_router = APIRouter(prefix="/student/quizzes", tags=["quizzes"], dependencies=[Depends(require_student)])
@@ -83,10 +86,14 @@ class QuizOut(BaseModel):
     title: str
     question_count: int
     status: str  # open | submitted
+    can_submit: bool = True
     score: Optional[float] = None
     created_at: datetime
     submitted_at: Optional[datetime] = None
     questions: list[QuizQuestionOut] = []
+    # Revealed to the student after submission:
+    concept_results: Optional[list[ConceptResultOut]] = None
+    at_risk: Optional[list[AtRiskOut]] = None
 
 
 class QuizSummaryOut(BaseModel):
@@ -102,12 +109,17 @@ class QuizSummaryOut(BaseModel):
     created_at: datetime
     submitted_at: Optional[datetime] = None
 
-class StudentPracticeGenerateIn(BaseModel):
-    book_id: Optional[uuid.UUID] = None
-    chapter_id: Optional[uuid.UUID] = None
-    question_count: Optional[int] = Field(default=None, ge=2, le=30)
-    title: Optional[str] = Field(default=None, max_length=200)
-    
+
+class QuizAnswerIn(BaseModel):
+    question_id: uuid.UUID
+    chosen_index: Optional[int] = Field(default=None, ge=0, le=3)
+    answer_text: Optional[str] = Field(default=None, max_length=2000)
+
+
+class QuizSubmitIn(BaseModel):
+    answers: list[QuizAnswerIn] = Field(default_factory=list, max_length=40)
+
+
 def _format_quiz_out(
     db: Session,
     quiz: Quiz,
@@ -127,7 +139,7 @@ def _format_quiz_out(
         ).all()
         resp_by_qid = {r.question_id: r for r in resps}
 
-    student_submitted = bool(resp_by_qid) or quiz.status == quiz_service.SUBMITTED
+    student_submitted = bool(resp_by_qid) or (student_id is not None and quiz.kind == "practice" and quiz.status == quiz_service.SUBMITTED)
     show_keys = reveal_keys or student_submitted
 
     questions_out: list[QuizQuestionOut] = []
@@ -163,13 +175,19 @@ def _format_quiz_out(
 
     student_score = quiz.score
     student_status = quiz.status
-    if student_id is not None and resp_by_qid:
-        student_status = quiz_service.SUBMITTED
-        scores = [r.score for r in resp_by_qid.values() if r.score is not None]
-        if scores:
-            student_score = round(sum(scores) / len(scores), 4)
+    if student_id is not None:
+        if resp_by_qid:
+            student_status = quiz_service.SUBMITTED
+            scores = [r.score for r in resp_by_qid.values() if r.score is not None]
+            if scores:
+                student_score = round(sum(scores) / len(scores), 4)
+        elif quiz.kind == "teacher":
+            student_status = quiz_service.OPEN
+            student_score = None
 
-    return QuizOut(
+    can_sub = student_status == quiz_service.OPEN and quiz_service.can_submit_quiz(quiz)
+
+    out = QuizOut(
         id=quiz.id,
         kind=quiz.kind,
         book_id=quiz.book_id,
@@ -178,14 +196,56 @@ def _format_quiz_out(
         title=quiz.title,
         question_count=quiz.question_count,
         status=student_status,
+        can_submit=can_sub,
         score=student_score,
         created_at=quiz.created_at,
-        submitted_at=quiz.submitted_at,
+        submitted_at=quiz.submitted_at if student_status == quiz_service.SUBMITTED else None,
         questions=questions_out,
     )
 
+    if student_id is not None and student_submitted:
+        events = db.scalars(
+            select(MasteryEvent)
+            .where(MasteryEvent.quiz_id == quiz.id, MasteryEvent.student_id == student_id)
+            .order_by(MasteryEvent.id)
+        ).all()
+        out.concept_results = [
+            ConceptResultOut(
+                concept_id=e.concept_id,
+                concept_name=e.concept_name,
+                score=e.score,
+                asked=e.asked,
+                correct=e.correct,
+                weak=e.score < settings.weak_below,
+            )
+            for e in events
+            if e.kind == mastery.QUIZ
+        ]
+        out.at_risk = [
+            AtRiskOut(concept_id=e.concept_id, concept_name=e.concept_name, reason=e.reason)
+            for e in events
+            if e.kind == mastery.PROPAGATED
+        ]
 
-def _summary_out(quiz: Quiz) -> QuizSummaryOut:
+    return out
+
+
+def _summary_out(db: Session, quiz: Quiz, student_id: Optional[uuid.UUID] = None) -> QuizSummaryOut:
+    status_val = quiz.status
+    score_val = quiz.score
+    sub_at = quiz.submitted_at
+    if student_id is not None and quiz.kind == "teacher":
+        resps = db.scalars(
+            select(QuizResponse).where(QuizResponse.quiz_id == quiz.id, QuizResponse.student_id == student_id)
+        ).all()
+        if resps:
+            status_val = quiz_service.SUBMITTED
+            scores = [r.score for r in resps if r.score is not None]
+            score_val = round(sum(scores) / len(scores), 4) if scores else 0.0
+        else:
+            status_val = quiz_service.OPEN
+            score_val = None
+            sub_at = None
     return QuizSummaryOut(
         id=quiz.id,
         kind=quiz.kind,
@@ -194,10 +254,10 @@ def _summary_out(quiz: Quiz) -> QuizSummaryOut:
         assignment_id=quiz.assignment_id,
         title=quiz.title,
         question_count=quiz.question_count,
-        status=quiz.status,
-        score=quiz.score,
+        status=status_val,
+        score=score_val,
         created_at=quiz.created_at,
-        submitted_at=quiz.submitted_at,
+        submitted_at=sub_at,
     )
 
 
@@ -229,7 +289,7 @@ def list_quizzes(
     teacher=Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    return [_summary_out(q) for q in quiz_service.list_teacher_quizzes(db, teacher, book_id, chapter_id, assignment_id)]
+    return [_summary_out(db, q) for q in quiz_service.list_teacher_quizzes(db, teacher, book_id, chapter_id, assignment_id)]
 
 
 @teacher_quiz_router.get("/{quiz_id}", response_model=QuizOut)
@@ -245,11 +305,11 @@ def delete_quiz(quiz_id: uuid.UUID, teacher=Depends(require_teacher), db: Sessio
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# ---- student routes (viewing assigned quizzes; practice + submit in steps 3-4) ----
+# ---- student routes --------------------------------------------------------
 
 @student_quiz_router.get("", response_model=list[QuizSummaryOut])
 def my_quizzes(assignment_id: Optional[uuid.UUID] = None, student=Depends(require_student), db: Session = Depends(get_db)):
-    return [_summary_out(q) for q in quiz_service.list_student_quizzes(db, student, assignment_id)]
+    return [_summary_out(db, q, student_id=student.id) for q in quiz_service.list_student_quizzes(db, student, assignment_id)]
 
 
 @student_quiz_router.get("/{quiz_id}", response_model=QuizOut)
@@ -257,13 +317,40 @@ def my_quiz(quiz_id: uuid.UUID, student=Depends(require_student), db: Session = 
     quiz = quiz_service.get_student_quiz(db, student, quiz_id)
     return _format_quiz_out(db, quiz, reveal_keys=False, student_id=student.id)
 
+
+@student_quiz_router.post("/{quiz_id}/submit", response_model=QuizOut)
+def submit_student_quiz(
+    quiz_id: uuid.UUID,
+    body: QuizSubmitIn,
+    student=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    quiz = quiz_service.get_student_quiz(db, student, quiz_id)
+    ans_map = {
+        a.question_id: quiz_service.QuizAnswerInput(
+            question_id=a.question_id,
+            chosen_index=a.chosen_index,
+            answer_text=a.answer_text,
+        )
+        for a in body.answers
+    }
+    graded = quiz_service.submit_quiz(db, student, quiz, ans_map)
+    return _format_quiz_out(db, graded, reveal_keys=False, student_id=student.id)
+
+
+class StudentPracticeGenerateIn(BaseModel):
+    book_id: Optional[uuid.UUID] = None
+    chapter_id: Optional[uuid.UUID] = None
+    question_count: Optional[int] = Field(default=None, ge=2, le=30)
+    title: Optional[str] = Field(default=None, max_length=200)
+
+
 @student_practice_router.post("/generate", response_model=QuizOut, status_code=status.HTTP_201_CREATED)
 def generate_practice_quiz(
     body: StudentPracticeGenerateIn = StudentPracticeGenerateIn(),
     student=Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    # Tenancy check happens inside _resolve_student_practice_pool before any LLM call; check rate limit after book/chapter 404 check
     spec = quiz_service.StudentPracticeSpec(**body.model_dump())
     quiz_service._resolve_student_practice_pool(db, student, spec.book_id, spec.chapter_id)
     limiter.check("quiz_practice", str(student.id), settings.rate_quizzes_per_hour, 3600)

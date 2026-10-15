@@ -1,15 +1,15 @@
-"""Quiz generation, assignment linking, and tenancy rules (Phase 4 Step 2)."""
+"""Quiz generation, assignment linking, hybrid grading, and unified mastery updates (Phase 4 Steps 2–5)."""
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.assessment import mastery, quiz_agent
+from app.assessment import checks, llm_grader, mastery, quiz_agent
 from app.assignments import service as assignment_service
 from app.assignments.scope import chapter_concepts
 from app.content_library import access
@@ -18,8 +18,8 @@ from app.core.errors import ProcessingError
 from app.graph_store import get_graph_store
 from app.llm import get_llm_provider
 from app.models import (
-    Assignment, AssignmentConcept, AssignmentLevel, Book, Chapter, ChapterStatus, Concept, Page, Quiz, QuizKind,
-    QuizQuestion, Room, RoomMember, User, student_book,
+    AnswerFormat, Assignment, AssignmentConcept, AssignmentLevel, Book, Chapter, ChapterStatus, Concept, Page, Quiz,
+    QuizKind, QuizQuestion, QuizResponse, User, student_book,
 )
 
 logger = logging.getLogger(__name__)
@@ -217,7 +217,8 @@ def generate_teacher_quiz(db: Session, teacher: User, spec: TeacherQuizSpec) -> 
 
     cids = [c.id for c in concepts]
     contexts, related_map = quiz_agent.load_concept_contexts(db, cids, book_ids=[book.id], store=_store())
-    plan = quiz_agent.plan_quiz_questions(list(contexts), count, related_map)
+    primary_cids = [cid for cid in cids if cid in contexts]
+    plan = quiz_agent.plan_quiz_questions(primary_cids, count, related_map)
     if not plan:
         raise HTTPException(status.HTTP_409_CONFLICT, "No ready concepts found to generate a quiz")
 
@@ -335,6 +336,7 @@ def list_student_quizzes(db: Session, student: User, assignment_id: Optional[uui
         query = query.where(Quiz.assignment_id == assignment_id)
     return list(db.scalars(query.order_by(Quiz.created_at.desc()).limit(50)))
 
+
 @dataclass
 class StudentPracticeSpec:
     book_id: Optional[uuid.UUID] = None
@@ -398,7 +400,6 @@ def _resolve_student_practice_pool(
     if not concepts:
         raise HTTPException(status.HTTP_409_CONFLICT, "No ready chapters found in your linked books yet")
 
-    # Pick the book of the student's weakest concept (or the first ready concept's book) as the quiz's primary book_id
     first_page = db.get(Page, concepts[0].page_id)
     first_chapter = db.get(Chapter, first_page.chapter_id)
     book = db.get(Book, first_chapter.book_id)
@@ -417,7 +418,6 @@ def generate_student_practice_quiz(db: Session, student: User, spec: StudentPrac
     )
     candidate_ids = [c.id for c in candidates]
 
-    # Query mastery_events state for these candidate concepts
     states = mastery.current_state(db, student.id, candidate_ids)
     weak_states = sorted(
         (s for s in states.values() if s.status == mastery.WEAK),
@@ -431,7 +431,6 @@ def generate_student_practice_quiz(db: Session, student: User, spec: StudentPrac
     at_risk_ids = [s.concept_id for s in at_risk_states]
     doubted_ids = mastery.doubted_concept_ids(db, student.id)
 
-    # If no explicit book was chosen and the student has weak/at-risk concepts, anchor quiz.book_id to the primary weak concept's book
     focus_ids = weak_ids or at_risk_ids
     if spec.book_id is None and focus_ids:
         focus_concept = db.get(Concept, focus_ids[0])
@@ -451,8 +450,9 @@ def generate_student_practice_quiz(db: Session, student: User, spec: StudentPrac
     contexts, related_map = quiz_agent.load_concept_contexts(
         db, weighted_slots, book_ids=allowed_book_ids, store=_store()
     )
+    valid_slots = [cid for cid in weighted_slots if cid in contexts]
     plan = quiz_agent.plan_quiz_questions(
-        weighted_slots, count, related_map, preserve_slots=True
+        valid_slots, count, related_map, preserve_slots=True
     )
     if not plan:
         raise HTTPException(status.HTTP_409_CONFLICT, "No ready concepts found to generate a practice quiz")
@@ -489,5 +489,131 @@ def generate_student_practice_quiz(db: Session, student: User, spec: StudentPrac
     db.refresh(quiz)
 
     _fill_quiz_questions(db, quiz, contexts)
+    db.refresh(quiz)
+    return quiz
+
+
+# ---- Phase 4 Step 4 & Step 5: Hybrid Grading & Unified Mastery Integration ------------------------------------
+
+@dataclass
+class QuizAnswerInput:
+    question_id: uuid.UUID
+    chosen_index: Optional[int] = None
+    answer_text: Optional[str] = None
+
+
+def can_submit_quiz(quiz: Quiz) -> bool:
+    ready = sum(1 for q in quiz.questions if q.status == "ready")
+    return not any(q.status == "pending" for q in quiz.questions) and ready >= min(
+        settings.check_min_questions, len(quiz.questions)
+    )
+
+
+def has_student_submitted(db: Session, quiz: Quiz, student_id: uuid.UUID) -> bool:
+    if quiz.kind == QuizKind.PRACTICE and quiz.status == SUBMITTED:
+        return True
+    existing = db.scalar(
+        select(func.count())
+        .select_from(QuizResponse)
+        .where(QuizResponse.quiz_id == quiz.id, QuizResponse.student_id == student_id)
+    )
+    return bool(existing and existing > 0)
+
+
+def submit_quiz(db: Session, student: User, quiz: Quiz, answers: dict[uuid.UUID, QuizAnswerInput]) -> Quiz:
+    """Grades a quiz using the hybrid engine (code for MCQ, LLM for short-answer) and writes atomic `quiz`
+    and `propagated` events to `mastery_events` in ONE transaction."""
+    if has_student_submitted(db, quiz, student.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This quiz was already submitted")
+    if not can_submit_quiz(quiz):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Some questions aren't ready yet. Please try again in a moment.")
+
+    by_id = {q.id: q for q in quiz.questions}
+    unknown = [qid for qid in answers if qid not in by_id or by_id[qid].status != "ready"]
+    if unknown:
+        raise HTTPException(422, "An answer doesn't match a ready question of this quiz")
+
+    cids = {q.concept_id for q in quiz.questions if q.concept_id}
+    concept_names = {c.id: c.name for c in db.scalars(select(Concept).where(Concept.id.in_(cids)))} if cids else {}
+
+    llm = _llm()
+    ready_questions = [q for q in quiz.questions if q.status == "ready"]
+    graded_rows: list[QuizResponse] = []
+    per_concept: dict[uuid.UUID, tuple[int, int]] = {}
+
+    for q in ready_questions:
+        ans = answers.get(q.id)
+        if q.answer_format == AnswerFormat.MCQ:
+            chosen = (
+                ans.chosen_index
+                if ans is not None and isinstance(ans.chosen_index, int) and not isinstance(ans.chosen_index, bool)
+                else None
+            )
+            g = checks.grade(
+                checks.Question(str(q.concept_id), q.question or "", list(q.options or []), q.correct_index or 0, q.explanation),
+                chosen,
+            )
+            q_score = 1.0 if g.correct else 0.0
+            q_correct = g.correct
+            q_feedback = q.explanation
+            resp = QuizResponse(
+                quiz_id=quiz.id,
+                question_id=q.id,
+                student_id=student.id,
+                chosen_index=chosen,
+                answer_text=None,
+                score=q_score,
+                correct=q_correct,
+                feedback=q_feedback,
+            )
+        else:
+            raw_text = ans.answer_text if ans is not None else None
+            try:
+                sa_grade = llm_grader.grade_short_answer(
+                    llm,
+                    question=q.question or "",
+                    expected_answer=q.expected_answer or "",
+                    student_answer=raw_text,
+                    concept_name=concept_names.get(q.concept_id, ""),
+                )
+            except llm_grader.ShortAnswerGradeError as exc:
+                db.rollback()
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    str(exc),
+                ) from exc
+            q_score = sa_grade.score
+            q_correct = sa_grade.correct
+            q_feedback = sa_grade.feedback
+            resp = QuizResponse(
+                quiz_id=quiz.id,
+                question_id=q.id,
+                student_id=student.id,
+                chosen_index=None,
+                answer_text=" ".join((raw_text or "").split()) or None,
+                score=q_score,
+                correct=q_correct,
+                feedback=q_feedback,
+            )
+
+        graded_rows.append(resp)
+        if q.concept_id is not None:
+            asked, right = per_concept.get(q.concept_id, (0, 0))
+            per_concept[q.concept_id] = (asked + 1, right + (1 if q_correct else 0))
+
+    overall_score = round(sum(r.score for r in graded_rows) / len(graded_rows), 4) if graded_rows else 0.0
+    now = datetime.now(timezone.utc)
+
+    try:
+        db.add_all(graded_rows)
+        quiz.score = overall_score
+        quiz.status = SUBMITTED
+        quiz.submitted_at = now
+        mastery.record_quiz(db, student.id, quiz.id, quiz.assignment_id, per_concept)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
     db.refresh(quiz)
     return quiz

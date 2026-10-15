@@ -185,7 +185,8 @@ def test_a_failure_while_recording_leaves_the_check_open_and_no_events(client, s
     a = assign(client, world, level="concept", chapter=None, concept_ids=[world["concepts"]["Cell"]])
     check = client.post(f"/student/assignments/{a['id']}/complete", headers=world["sh"]).json()
     monkeypatch.setattr(mastery, "dependents", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("graph unavailable")))
-    answers = [{"question_id": q["id"], "chosen_index": 3} for q in check["questions"]]
+    key = keys_for(check)
+    answers = [{"question_id": q["id"], "chosen_index": (key[q["id"]] + 1) % 4} for q in check["questions"]]
     try:
         res = client.post(f"/student/checks/{check['id']}/submit", json={"answers": answers}, headers=world["sh"])
         assert res.status_code == 500
