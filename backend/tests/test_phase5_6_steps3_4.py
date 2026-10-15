@@ -252,3 +252,24 @@ def test_briefing_endpoint_5_minute_cache_and_invalidation(client, session_facto
     assert client.get(f"/teacher/students/{w['s_2_id']}/briefing", headers=w["th_a"]).status_code == 404
     assert llm_calls == 3
     assert client.get(f"/teacher/students/{w['s_1_id']}/briefing", headers=w["sh_1"]).status_code == 403
+    
+def test_phase5_6_check_runs_clean_and_rolls_back(session_factory):
+    from types import SimpleNamespace
+    from sqlalchemy import func, select
+    from app.db import phase5_6_check
+
+    with session_factory() as db:
+        w = _setup_briefing_world(db)
+        users_before = db.scalar(select(func.count()).select_from(User))
+        logs_before = db.scalar(select(func.count()).select_from(SessionLog))
+        engine = db.get_bind()
+
+    opts = SimpleNamespace(book=None, skip_model=True, allow_fake=True)
+    lines, fails = phase5_6_check.run(engine, opts)
+    output = "\n".join(lines)
+    assert fails == 0, output
+    assert "RESULT: 17 PASS, 0 FAIL" in output
+
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(User)) == users_before
+        assert db.scalar(select(func.count()).select_from(SessionLog)) == logs_before
