@@ -39,7 +39,8 @@ MCQ_SYSTEM = (
     "(3) For RECALL: test a key definition, fact, or principle stated on the page without copying a sentence verbatim. "
     "(4) For APPLICATION: present a concrete scenario or problem where the student must apply the concept from the page. "
     "(5) For CROSS_CONCEPT: require the student to connect BOTH the primary concept and the related concept. "
-    "(6) Add no outside facts. If QUESTIONS ALREADY ASKED are listed, ask about a different aspect."
+    "(6) Make sure options[correct_index] is the exact option that your explanation proves right. "
+    "(7) Add no outside facts. If QUESTIONS ALREADY ASKED are listed, ask about a different aspect."
 )
 
 SHORT_SYSTEM = (
@@ -128,19 +129,18 @@ class GeneratedQuizQuestion:
 
 def question_mix(total: int, can_cross: bool = True) -> tuple[int, int, int]:
     """Returns `(n_recall, n_application, n_cross_concept)` summing to `total`.
-    Baseline: 50% recall, 30% application, 20% cross_concept, with at least 1 cross_concept when `total >= 2` and `can_cross`."""
+    Baseline: 50% recall, 30% application, 20% cross_concept, with at least 1 cross_concept and at least 1 recall
+    whenever `total >= 2` and `can_cross`."""
     if total <= 0:
         return 0, 0, 0
     if total == 1 or not can_cross:
         n_cross = 0
-        n_app = round(total * settings.quiz_application_share) if total > 1 else 0
+        n_app = min(round(total * settings.quiz_application_share), total - 1) if total > 1 else 0
         n_recall = total - n_app
         return n_recall, n_app, n_cross
 
     n_cross = max(1, round(total * settings.quiz_cross_concept_share))
-    n_app = round(total * settings.quiz_application_share)
-    if n_cross + n_app > total:
-        n_app = max(0, total - n_cross)
+    n_app = max(0, min(round(total * settings.quiz_application_share), total - n_cross - 1))
     n_recall = total - n_app - n_cross
     return n_recall, n_app, n_cross
 
@@ -256,11 +256,9 @@ def plan_quiz_questions(
         return []
     related_map = related_map or {}
 
-    # A cross-concept question needs either a graph-connected partner or at least 2 distinct concepts in the pool
     has_any_pair = len(ordered) >= 2 or any(bool(related_map.get(c)) for c in ordered)
     n_recall, n_app, n_cross = question_mix(total_questions, can_cross=has_any_pair)
 
-    # Spread concepts evenly when there are more concepts than questions, or cycle through them when fewer
     if len(ordered) >= total_questions:
         picked = [ordered[int((i + 0.5) * len(ordered) / total_questions)] for i in range(total_questions)]
     else:
@@ -282,7 +280,6 @@ def plan_quiz_questions(
             else:
                 qtype = QuestionType.APPLICATION
 
-        # Recall -> MCQ; Cross-concept -> Short answer (or MCQ for every 2nd cross question); Application -> mostly MCQ + short answer
         if qtype == QuestionType.RECALL:
             fmt = AnswerFormat.MCQ
         elif qtype == QuestionType.CROSS_CONCEPT:
