@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.assessment import quiz_agent
+from app.assessment import mastery, quiz_agent
 from app.assignments import service as assignment_service
 from app.assignments.scope import chapter_concepts
 from app.content_library import access
@@ -18,8 +18,8 @@ from app.core.errors import ProcessingError
 from app.graph_store import get_graph_store
 from app.llm import get_llm_provider
 from app.models import (
-    Assignment, AssignmentConcept, AssignmentLevel, Book, Chapter, Concept, Quiz, QuizKind, QuizQuestion, Room,
-    RoomMember, User, student_book,
+    Assignment, AssignmentConcept, AssignmentLevel, Book, Chapter, ChapterStatus, Concept, Page, Quiz, QuizKind,
+    QuizQuestion, Room, RoomMember, User, student_book,
 )
 
 logger = logging.getLogger(__name__)
@@ -334,3 +334,160 @@ def list_student_quizzes(db: Session, student: User, assignment_id: Optional[uui
     if assignment_id is not None:
         query = query.where(Quiz.assignment_id == assignment_id)
     return list(db.scalars(query.order_by(Quiz.created_at.desc()).limit(50)))
+
+@dataclass
+class StudentPracticeSpec:
+    book_id: Optional[uuid.UUID] = None
+    chapter_id: Optional[uuid.UUID] = None
+    question_count: Optional[int] = None
+    title: Optional[str] = None
+
+
+def _resolve_student_practice_pool(
+    db: Session,
+    student: User,
+    book_id: Optional[uuid.UUID],
+    chapter_id: Optional[uuid.UUID],
+) -> tuple[Book, Optional[Chapter], list[Concept], list[uuid.UUID]]:
+    """Returns `(primary_book, optional_chapter, candidate_concepts, allowed_book_ids)` for a student's practice quiz.
+    Strictly enforces that any requested `book_id` or `chapter_id` belongs to a book the student has LINKED (404 otherwise)."""
+    linked_ids = list(db.scalars(select(student_book.c.book_id).where(student_book.c.student_id == student.id)))
+    if book_id is not None and book_id not in set(linked_ids):
+        raise _404("Book")
+
+    chapter: Optional[Chapter] = None
+    if chapter_id is not None:
+        chapter = db.get(Chapter, chapter_id)
+        if chapter is None or chapter.status != ChapterStatus.READY or chapter.book_id not in set(linked_ids):
+            raise _404("Chapter")
+        if book_id is not None and chapter.book_id != book_id:
+            raise _404("Chapter")
+        book = db.get(Book, chapter.book_id)
+        concepts = chapter_concepts(db, chapter.id)
+        if not concepts:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This chapter has no concepts ready for practice yet")
+        return book, chapter, concepts, [book.id]
+
+    if book_id is not None:
+        book = access.get_linked_book(db, student, book_id)
+        concepts = list(
+            db.scalars(
+                select(Concept)
+                .join(Page, Page.id == Concept.page_id)
+                .join(Chapter, Chapter.id == Page.chapter_id)
+                .where(Chapter.book_id == book.id, Chapter.status == ChapterStatus.READY, Concept.is_canonical.is_(True))
+                .order_by(Chapter.sequence_num, Page.page_number, Concept.position)
+            )
+        )
+        if not concepts:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This book has no ready concepts for practice yet")
+        return book, None, concepts, [book.id]
+
+    if not linked_ids:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Link a book first before starting a practice quiz")
+
+    concepts = list(
+        db.scalars(
+            select(Concept)
+            .join(Page, Page.id == Concept.page_id)
+            .join(Chapter, Chapter.id == Page.chapter_id)
+            .where(Chapter.book_id.in_(linked_ids), Chapter.status == ChapterStatus.READY, Concept.is_canonical.is_(True))
+            .order_by(Chapter.book_id, Chapter.sequence_num, Page.page_number, Concept.position)
+        )
+    )
+    if not concepts:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No ready chapters found in your linked books yet")
+
+    # Pick the book of the student's weakest concept (or the first ready concept's book) as the quiz's primary book_id
+    first_page = db.get(Page, concepts[0].page_id)
+    first_chapter = db.get(Chapter, first_page.chapter_id)
+    book = db.get(Book, first_chapter.book_id)
+    return book, None, concepts, linked_ids
+
+
+def generate_student_practice_quiz(db: Session, student: User, spec: StudentPracticeSpec) -> Quiz:
+    """Builds a student self-triggered practice quiz (default 10 questions) weighted 60% toward weak concepts,
+    20% toward at-risk concepts, and 20% toward general revision."""
+    count = spec.question_count or settings.quiz_practice_questions
+    if count < 1 or count > 30:
+        raise HTTPException(422, "Practice quiz question_count must be between 1 and 30")
+
+    book, chapter, candidates, allowed_book_ids = _resolve_student_practice_pool(
+        db, student, spec.book_id, spec.chapter_id
+    )
+    candidate_ids = [c.id for c in candidates]
+
+    # Query mastery_events state for these candidate concepts
+    states = mastery.current_state(db, student.id, candidate_ids)
+    weak_states = sorted(
+        (s for s in states.values() if s.status == mastery.WEAK),
+        key=lambda s: (s.score if s.score is not None else 0.0, s.name),
+    )
+    at_risk_states = sorted(
+        (s for s in states.values() if s.status == mastery.AT_RISK),
+        key=lambda s: s.name,
+    )
+    weak_ids = [s.concept_id for s in weak_states]
+    at_risk_ids = [s.concept_id for s in at_risk_states]
+    doubted_ids = mastery.doubted_concept_ids(db, student.id)
+
+    # If no explicit book was chosen and the student has weak/at-risk concepts, anchor quiz.book_id to the primary weak concept's book
+    focus_ids = weak_ids or at_risk_ids
+    if spec.book_id is None and focus_ids:
+        focus_concept = db.get(Concept, focus_ids[0])
+        focus_page = db.get(Page, focus_concept.page_id) if focus_concept else None
+        focus_ch = db.get(Chapter, focus_page.chapter_id) if focus_page else None
+        if focus_ch is not None:
+            book = db.get(Book, focus_ch.book_id)
+
+    weighted_slots = quiz_agent.plan_practice_concepts(
+        candidate_ids=candidate_ids,
+        weak_ids=weak_ids,
+        at_risk_ids=at_risk_ids,
+        total_questions=count,
+        doubted_ids=doubted_ids,
+        seed=str(student.id),
+    )
+    contexts, related_map = quiz_agent.load_concept_contexts(
+        db, weighted_slots, book_ids=allowed_book_ids, store=_store()
+    )
+    plan = quiz_agent.plan_quiz_questions(
+        weighted_slots, count, related_map, preserve_slots=True
+    )
+    if not plan:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No ready concepts found to generate a practice quiz")
+
+    default_title = (
+        f"Practice: {chapter.title}" if chapter is not None
+        else f"Practice: {book.subject or 'Revision'} (Weak Areas)" if (weak_ids or at_risk_ids)
+        else f"Practice: {book.subject or 'Revision'}"
+    )
+    title = (spec.title or default_title).strip()[:200]
+
+    quiz = Quiz(
+        kind=QuizKind.PRACTICE,
+        student_id=student.id,
+        book_id=book.id,
+        chapter_id=chapter.id if chapter else None,
+        title=title,
+        question_count=count,
+        status=OPEN,
+    )
+    quiz.questions = [
+        QuizQuestion(
+            position=item.position,
+            concept_id=item.concept_id,
+            related_concept_id=item.related_concept_id,
+            question_type=item.question_type,
+            answer_format=item.answer_format,
+            status="pending",
+        )
+        for item in plan
+    ]
+    db.add(quiz)
+    db.commit()
+    db.refresh(quiz)
+
+    _fill_quiz_questions(db, quiz, contexts)
+    db.refresh(quiz)
+    return quiz

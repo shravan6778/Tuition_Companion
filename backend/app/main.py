@@ -16,7 +16,7 @@ from app.doubts.routes import router as doubt_router
 from app.parent.routes import router as parent_router
 from app.student.routes import router as student_router
 from app.teacher.routes import router as teacher_router
-from app.assessment.quiz_routes import student_quiz_router, teacher_quiz_router
+from app.assessment.quiz_routes import student_practice_router, student_quiz_router, teacher_quiz_router
 
 setup_logging()
 init_supertokens()
@@ -57,4 +57,5 @@ app.include_router(check_router)
 app.include_router(mastery_router)
 app.include_router(teacher_quiz_router)
 app.include_router(student_quiz_router)
+app.include_router(student_practice_router)
 app.include_router(parent_router)

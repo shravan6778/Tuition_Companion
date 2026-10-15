@@ -25,6 +25,7 @@ from app.models import Concept, Quiz, QuizResponse
 
 teacher_quiz_router = APIRouter(prefix="/teacher/quizzes", tags=["quizzes"], dependencies=[Depends(require_teacher)])
 student_quiz_router = APIRouter(prefix="/student/quizzes", tags=["quizzes"], dependencies=[Depends(require_student)])
+student_practice_router = APIRouter(prefix="/student/practice", tags=["quizzes"], dependencies=[Depends(require_student)])
 
 FAILED_MESSAGE = "We couldn't write this question right now."
 
@@ -101,7 +102,12 @@ class QuizSummaryOut(BaseModel):
     created_at: datetime
     submitted_at: Optional[datetime] = None
 
-
+class StudentPracticeGenerateIn(BaseModel):
+    book_id: Optional[uuid.UUID] = None
+    chapter_id: Optional[uuid.UUID] = None
+    question_count: Optional[int] = Field(default=None, ge=2, le=30)
+    title: Optional[str] = Field(default=None, max_length=200)
+    
 def _format_quiz_out(
     db: Session,
     quiz: Quiz,
@@ -249,4 +255,17 @@ def my_quizzes(assignment_id: Optional[uuid.UUID] = None, student=Depends(requir
 @student_quiz_router.get("/{quiz_id}", response_model=QuizOut)
 def my_quiz(quiz_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
     quiz = quiz_service.get_student_quiz(db, student, quiz_id)
+    return _format_quiz_out(db, quiz, reveal_keys=False, student_id=student.id)
+
+@student_practice_router.post("/generate", response_model=QuizOut, status_code=status.HTTP_201_CREATED)
+def generate_practice_quiz(
+    body: StudentPracticeGenerateIn = StudentPracticeGenerateIn(),
+    student=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    # Tenancy check happens inside _resolve_student_practice_pool before any LLM call; check rate limit after book/chapter 404 check
+    spec = quiz_service.StudentPracticeSpec(**body.model_dump())
+    quiz_service._resolve_student_practice_pool(db, student, spec.book_id, spec.chapter_id)
+    limiter.check("quiz_practice", str(student.id), settings.rate_quizzes_per_hour, 3600)
+    quiz = quiz_service.generate_student_practice_quiz(db, student, spec)
     return _format_quiz_out(db, quiz, reveal_keys=False, student_id=student.id)

@@ -244,37 +244,127 @@ def load_concept_contexts(
 
     return contexts, related_map
 
+def plan_practice_concepts(
+    candidate_ids: Sequence[uuid.UUID],
+    weak_ids: Sequence[uuid.UUID],
+    at_risk_ids: Sequence[uuid.UUID],
+    total_questions: int,
+    doubted_ids: Sequence[uuid.UUID] = (),
+    seed: Optional[str] = None,
+) -> list[uuid.UUID]:
+    """Selects `total_questions` concept slots for a student practice quiz using the 60/20/20 weighting:
+      * 60% (`quiz_weak_share`) from `weak_ids` (ordered lowest score first by caller)
+      * 20% (`quiz_at_risk_share`) from `at_risk_ids`
+      * 20% (`quiz_revision_share`) from remaining `candidate_ids` (doubted concepts first, then sampled/shuffled)
+    If a bucket is empty, its quota spills over into `weak` first, then `at_risk`, then `revision`."""
+    pool = list(dict.fromkeys(candidate_ids))
+    if not pool or total_questions <= 0:
+        return []
+
+    pool_set = set(pool)
+    weak = [c for c in dict.fromkeys(weak_ids) if c in pool_set]
+    at_risk = [c for c in dict.fromkeys(at_risk_ids) if c in pool_set and c not in set(weak)]
+    used = set(weak) | set(at_risk)
+    rest = [c for c in pool if c not in used]
+
+    # Order revision pool: doubted concepts first, then remaining concepts in deterministic random order
+    doubted_in_rest = [c for c in dict.fromkeys(doubted_ids) if c in set(rest)]
+    others = [c for c in rest if c not in set(doubted_in_rest)]
+    if seed is not None:
+        random.Random(seed).shuffle(others)
+    revision = doubted_in_rest + others
+
+    n_weak = round(total_questions * settings.quiz_weak_share) if weak else 0
+    n_risk = round(total_questions * settings.quiz_at_risk_share) if at_risk else 0
+    if n_weak + n_risk > total_questions:
+        n_risk = max(0, total_questions - n_weak)
+    n_rev = total_questions - n_weak - n_risk
+
+    # Spillover if any bucket has no concepts at all
+    if not revision and n_rev > 0:
+        if weak:
+            n_weak += n_rev
+        elif at_risk:
+            n_risk += n_rev
+        n_rev = 0
+    if not at_risk and n_risk > 0:
+        if weak:
+            n_weak += n_risk
+        else:
+            n_rev += n_risk
+        n_risk = 0
+    if not weak and n_weak > 0:
+        if at_risk:
+            n_risk += n_weak
+        else:
+            n_rev += n_weak
+        n_weak = 0
+
+    def _take(bucket: list[uuid.UUID], count: int) -> list[uuid.UUID]:
+        if not bucket or count <= 0:
+            return []
+        return [bucket[i % len(bucket)] for i in range(count)]
+
+    chosen = _take(weak, n_weak) + _take(at_risk, n_risk) + _take(revision, n_rev)
+    if len(chosen) < total_questions:
+        chosen += _take(pool, total_questions - len(chosen))
+    return chosen[:total_questions]
+
 
 def plan_quiz_questions(
     concept_ids: Sequence[uuid.UUID],
     total_questions: int,
     related_map: Optional[dict[uuid.UUID, list[uuid.UUID]]] = None,
+    *,
+    preserve_slots: bool = False,
 ) -> list[PlannedQuizItem]:
-    """Plans `total_questions` items across `concept_ids` with the 50/30/20 recall/application/cross_concept mix."""
-    ordered = list(dict.fromkeys(concept_ids))
-    if not ordered or total_questions <= 0:
+    """Plans `total_questions` items across `concept_ids` with the 50/30/20 recall/application/cross_concept mix.
+    When `preserve_slots=True` (used for weighted student practice quizzes), `concept_ids` already holds the exact
+    weighted slot assignment of length `total_questions` and is not deduplicated."""
+    if not concept_ids or total_questions <= 0:
         return []
     related_map = related_map or {}
-
-    has_any_pair = len(ordered) >= 2 or any(bool(related_map.get(c)) for c in ordered)
+    unique = list(dict.fromkeys(concept_ids))
+    has_any_pair = len(unique) >= 2 or any(bool(related_map.get(c)) for c in unique)
     n_recall, n_app, n_cross = question_mix(total_questions, can_cross=has_any_pair)
 
-    if len(ordered) >= total_questions:
-        picked = [ordered[int((i + 0.5) * len(ordered) / total_questions)] for i in range(total_questions)]
+    if preserve_slots and len(concept_ids) == total_questions:
+        picked = list(concept_ids)
+    elif len(unique) >= total_questions:
+        picked = [unique[int((i + 0.5) * len(unique) / total_questions)] for i in range(total_questions)]
     else:
-        picked = [ordered[i % len(ordered)] for i in range(total_questions)]
+        picked = [unique[i % len(unique)] for i in range(total_questions)]
 
-    types = (
+    # Interleave question types across slots so weak/at-risk/revision concepts get a balanced mix of recall/app/cross
+    raw_types = (
         [QuestionType.RECALL] * n_recall
         + [QuestionType.APPLICATION] * n_app
         + [QuestionType.CROSS_CONCEPT] * n_cross
     )
+    if preserve_slots and total_questions > 2:
+        # Spread cross_concept and application across the weighted buckets instead of clustering all cross_concept at the tail
+        types = [""] * total_questions
+        step_slots = [int((i + 0.5) * total_questions / n_cross) for i in range(n_cross)] if n_cross else []
+        used_idx: set[int] = set()
+        for idx in step_slots:
+            while idx in used_idx and idx + 1 < total_questions:
+                idx += 1
+            types[idx] = QuestionType.CROSS_CONCEPT
+            used_idx.add(idx)
+        rem = [i for i in range(total_questions) if i not in used_idx]
+        app_slots = {rem[int((i + 0.5) * len(rem) / n_app)] for i in range(n_app)} if n_app and rem else set()
+        for i in rem:
+            types[i] = QuestionType.APPLICATION if i in app_slots else QuestionType.RECALL
+    else:
+        types = raw_types
 
     plan: list[PlannedQuizItem] = []
+    short_app_assigned = False
+    cross_seen = 0
     for idx, (cid, qtype) in enumerate(zip(picked, types)):
         rel_id: Optional[uuid.UUID] = None
         if qtype == QuestionType.CROSS_CONCEPT:
-            partners = related_map.get(cid) or [other for other in ordered if other != cid]
+            partners = related_map.get(cid) or [other for other in unique if other != cid]
             if partners:
                 rel_id = partners[idx % len(partners)]
             else:
@@ -283,9 +373,14 @@ def plan_quiz_questions(
         if qtype == QuestionType.RECALL:
             fmt = AnswerFormat.MCQ
         elif qtype == QuestionType.CROSS_CONCEPT:
-            fmt = AnswerFormat.SHORT_ANSWER if (idx % 2 == 0 or n_cross == 1) else AnswerFormat.MCQ
+            fmt = AnswerFormat.SHORT_ANSWER if (cross_seen % 2 == 0 or n_cross == 1) else AnswerFormat.MCQ
+            cross_seen += 1
         else:
-            fmt = AnswerFormat.SHORT_ANSWER if idx == n_recall else AnswerFormat.MCQ
+            if not short_app_assigned:
+                fmt = AnswerFormat.SHORT_ANSWER
+                short_app_assigned = True
+            else:
+                fmt = AnswerFormat.MCQ
 
         plan.append(
             PlannedQuizItem(
