@@ -9,6 +9,8 @@ class FakeLLMProvider:
     model_name = "fake"
 
     def complete_json(self, system: str, user: str) -> str:
+        if user.startswith("PERSONALIZATION BRIEFING"):
+            return self._briefing(user)
         if user.startswith("FRONT PAGES TEXT:\n"):  # reads 'Board: CBSE' style lines
             found = {}
             for key in ("board", "class", "subject", "publisher", "edition", "school"):
@@ -80,6 +82,55 @@ class FakeLLMProvider:
             for i, name in enumerate(lines)
         ]
         return json.dumps({"concepts": concepts})
+
+    def _briefing(self, user_prompt: str) -> str:
+        session_lines = re.findall(r"- \[(\d{4}-\d{2}-\d{2})\] ([^\n]+)", user_prompt)
+        weak_lines = re.findall(r"- WEAK: ([^(\n]+?)\s*\(([^)]+)\)", user_prompt)
+        risk_lines = re.findall(r"- AT_RISK: ([^(\n]+?)\s*\(([^)]+)\)", user_prompt)
+        allowed = re.findall(r"ALLOWED_CONCEPT: ([^\n]+)", user_prompt)
+
+        if session_lines:
+            dt, note = session_lines[0]
+            last_cov = f"In the most recent session ({dt}), the student worked on: {note[:160]}"
+        else:
+            last_cov = "No prior teacher session logs have been recorded yet; recent activity comes from checks and quizzes."
+
+        weak_parts = []
+        focus_concepts = []
+        for name, reason in weak_lines[:3]:
+            clean_name = name.strip()
+            weak_parts.append(f"{clean_name} ({reason.strip()})")
+            if clean_name in allowed and clean_name not in focus_concepts:
+                focus_concepts.append(clean_name)
+        for name, reason in risk_lines[:2]:
+            clean_name = name.strip()
+            weak_parts.append(f"{clean_name} is at risk ({reason.strip()})")
+            if clean_name in allowed and len(focus_concepts) < 3 and clean_name not in focus_concepts:
+                focus_concepts.append(clean_name)
+
+        if not weak_parts:
+            weak_summary = "No concepts are currently flagged as weak or at risk."
+        else:
+            weak_summary = "Current areas needing attention: " + "; ".join(weak_parts) + "."
+
+        if not focus_concepts and allowed:
+            focus_concepts = [allowed[0].strip()]
+
+        if focus_concepts:
+            suggested = (
+                f"Focus today's session on {', '.join(focus_concepts)} to reinforce foundational understanding "
+                "before moving to dependent topics."
+            )
+        else:
+            suggested = "Begin with a diagnostic check on the student's current chapter to establish baseline mastery."
+
+        return json.dumps({
+            "last_covered": last_cov,
+            "weak_areas": weak_summary,
+            "suggested_focus": suggested,
+            "focus_concepts": focus_concepts,
+        })
+
     def _quiz_mcq(self, user: str) -> str:
         qtype = (re.search(r"^QUESTION TYPE:\s*(.+)$", user, re.M) or [None, "RECALL"])[1].strip().lower()
         name = (re.search(r"^PRIMARY CONCEPT:\s*(.+)$", user, re.M) or [None, "this concept"])[1].strip()
@@ -123,13 +174,13 @@ class FakeLLMProvider:
             "expected_answer": expected[:550],
             "explanation": f"Grounded in the textbook section on {name}" + (f" and {rel}." if rel else "."),
         })
-        
+
     def _grade_short_answer(self, user: str) -> str:
         expected = (re.search(r"^EXPECTED ANSWER:\s*(.+)$", user, re.M) or [None, ""])[1].strip().lower()
         student = (re.search(r"^STUDENT ANSWER:\s*(.+)$", user, re.M) or [None, ""])[1].strip().lower()
         exp_words = {w for w in re.findall(r"[a-z0-9]+", expected) if len(w) > 3}
         stu_words = {w for w in re.findall(r"[a-z0-9]+", student) if len(w) > 3}
-        if not stu_words or "wrong" in student or "idk" in student:
+        if not stu_words or "wrong" in student or "idk" in student or "do not know" in student or "unrelated" in student:
             return json.dumps({
                 "score": 0.0,
                 "feedback": "The response does not state the key concept described in the textbook.",

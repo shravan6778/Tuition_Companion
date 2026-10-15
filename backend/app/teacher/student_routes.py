@@ -2,7 +2,8 @@
 
   Step 1: GET  /teacher/students/{student_id}/trends
   Step 2: POST /teacher/students/{student_id}/sessions
-          GET  /teacher/students/{student_id}/sessions"""
+          GET  /teacher/students/{student_id}/sessions
+  Step 4: GET  /teacher/students/{student_id}/briefing"""
 import uuid
 from datetime import date, datetime
 from typing import Optional
@@ -11,8 +12,11 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.agents import personalization
 from app.assessment import trends
 from app.auth.dependencies import require_teacher
+from app.core.config import settings
+from app.core.ratelimit import limiter
 from app.db.session import get_db
 from app.teacher import sessions as session_service
 
@@ -97,6 +101,23 @@ class SessionLogOut(BaseModel):
     created_at: datetime
 
 
+class StudentBriefingOut(BaseModel):
+    student_id: uuid.UUID
+    student_name: str
+    last_covered: str
+    weak_areas: str
+    suggested_focus: str
+    focus_concepts: list[str] = []
+    weak_count: int
+    at_risk_count: int
+    improving_count: int
+    declining_count: int
+    recent_session_count: int
+    model: str
+    generated_at: datetime
+    cached: bool
+
+
 @router.get("/{student_id}/trends", response_model=StudentTrendsOut)
 def get_student_trends(
     student_id: uuid.UUID,
@@ -171,3 +192,23 @@ def list_student_session_logs(
 ):
     rows = session_service.list_session_logs(db, teacher, student_id, limit=limit)
     return [SessionLogOut.model_validate(r) for r in rows]
+
+
+@router.get("/{student_id}/briefing", response_model=StudentBriefingOut)
+def get_student_briefing(
+    student_id: uuid.UUID,
+    refresh: bool = Query(default=False),
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    # Check tenant access first (404 before any rate limit or LLM call)
+    student = trends.ensure_teacher_can_access_student(db, teacher, student_id)
+    sig = personalization._compute_data_signature(db, teacher.id, student.id)
+    if not refresh:
+        cached = personalization.briefing_cache.get(teacher.id, student.id, sig)
+        if cached is not None:
+            return StudentBriefingOut(**cached.__dict__)
+
+    limiter.check("briefing", str(teacher.id), settings.rate_briefings_per_hour, 3600)
+    res, _ = personalization.get_or_generate_briefing(db, teacher, student.id, refresh=True)
+    return StudentBriefingOut(**res.__dict__)
