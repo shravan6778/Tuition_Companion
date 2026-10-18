@@ -20,9 +20,11 @@ export async function api(path, options = {}) {
 
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
-    const err = new Error(
-      errorData.detail || `Request failed with status ${res.status}`,
-    );
+    // FastAPI sends a string for our own errors and a list of {msg} objects for validation errors.
+    const detail = Array.isArray(errorData.detail)
+      ? errorData.detail.map((d) => d.msg).join("; ")
+      : errorData.detail;
+    const err = new Error(detail || `Request failed with status ${res.status}`);
     err.status = res.status;
     err.data = errorData;
     throw err;
