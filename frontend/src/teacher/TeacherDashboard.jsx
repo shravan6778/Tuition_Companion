@@ -1,162 +1,71 @@
-import React, { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import api from "../shared/api";
+import { createRoom, listRooms } from "../api/learning";
 import Header from "../shared/Header";
+import { Async, Empty, ErrorNote, useLoad, useSubmit } from "../shared/ui";
+import ChapterRequests from "./ChapterRequests";
 
 export default function TeacherDashboard() {
-  const [rooms, setRooms] = useState([]);
+  const state = useLoad(listRooms);
   const [name, setName] = useState("");
   const [type, setType] = useState("single_class");
+  const { busy, error, run } = useSubmit();
 
-  useEffect(() => {
-    loadRooms();
-  }, []);
-
-  async function loadRooms() {
-    try {
-      const res = await api.get("/teacher/rooms");
-      setRooms(res.data || []);
-    } catch (err) {
-      console.error("Failed to load rooms:", err);
-    }
-  }
-
-  async function createRoom(e) {
+  const create = (e) => {
     e.preventDefault();
-    try {
-      await api.post("/teacher/rooms", { name, room_type: type });
-      setName("");
-      loadRooms();
-    } catch (err) {
-      alert("Failed to create room.");
-    }
-  }
+    run(async () => { await createRoom(name.trim(), type); setName(""); state.reload(); });
+  };
 
   return (
-    <div>
-      <Header role="Teacher" />
-      <div
-        className="container"
-        style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}
-      >
-        <div style={{ display: "flex", gap: "1rem", marginBottom: "2rem" }}>
-          <Link
-            to="/teacher/library"
-            style={{
-              padding: "0.6rem 1.2rem",
-              background: "#0070f3",
-              color: "#fff",
-              textDecoration: "none",
-              borderRadius: "5px",
-            }}
-          >
-            Content Library
-          </Link>
-        </div>
+    <>
+      <Header title="Your rooms" subtitle="A room groups students. Open one to see its students, assign work and link books." />
+      <div className="container">
+        <Async state={state}>
+          {(rooms) => (
+            <>
+              <div className="tiles">
+                <div className="tile"><div className="num">{rooms.length}</div><div className="lbl">Rooms</div></div>
+                <div className="tile"><div className="num">{rooms.reduce((n, r) => n + r.member_count, 0)}</div><div className="lbl">Students</div></div>
+              </div>
 
-        <div
-          className="card"
-          style={{
-            padding: "1.5rem",
-            border: "1px solid #ddd",
-            borderRadius: "8px",
-            marginBottom: "2rem",
-          }}
-        >
-          <h2>Create a room</h2>
-          <form
-            onSubmit={createRoom}
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "1rem",
-              marginTop: "1rem",
-            }}
-          >
-            <div>
-              <label style={{ display: "block", marginBottom: "0.25rem" }}>
-                Room name
-              </label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                style={{ padding: "0.5rem", width: "100%" }}
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", marginBottom: "0.25rem" }}>
-                Room type
-              </label>
-              <select
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                style={{ padding: "0.5rem", width: "100%" }}
-              >
-                <option value="single_class">Single class</option>
-                <option value="mixed_class">Mixed class</option>
-              </select>
-            </div>
-            <button
-              type="submit"
-              style={{ padding: "0.6rem 1.2rem", alignSelf: "flex-start" }}
-            >
-              Create room
-            </button>
-          </form>
-        </div>
+              <ChapterRequests refreshKey={rooms.length} />
 
-        <div
-          className="card"
-          style={{
-            padding: "1.5rem",
-            border: "1px solid #ddd",
-            borderRadius: "8px",
-          }}
-        >
-          <h2>Your rooms</h2>
-          {rooms.length === 0 ? (
-            <p>No rooms created yet.</p>
-          ) : (
-            <table
-              style={{
-                width: "100%",
-                textAlign: "left",
-                borderCollapse: "collapse",
-                marginTop: "1rem",
-              }}
-            >
-              <thead>
-                <tr style={{ borderBottom: "2px solid #ddd" }}>
-                  <th style={{ padding: "0.5rem" }}>Room</th>
-                  <th style={{ padding: "0.5rem" }}>Type</th>
-                  <th style={{ padding: "0.5rem" }}>Join code</th>
-                  <th style={{ padding: "0.5rem" }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+              <div className="grid2" style={{ marginBottom: 16 }}>
+                {rooms.length === 0 && <div className="card mb0" style={{ gridColumn: "1 / -1" }}><Empty><p><strong>No rooms yet.</strong></p><p className="mb0">Create your first room below, then share its join code with your students.</p></Empty></div>}
                 {rooms.map((r) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={{ padding: "0.5rem" }}>{r.name}</td>
-                    <td style={{ padding: "0.5rem" }}>{r.room_type}</td>
-                    <td style={{ padding: "0.5rem" }}>
-                      <strong>{r.join_code}</strong>
-                    </td>
-                    <td style={{ padding: "0.5rem" }}>
-                      <Link
-                        to={`/teacher/rooms/${r.id}`}
-                        style={{ color: "#0070f3" }}
-                      >
-                        View members
-                      </Link>
-                    </td>
-                  </tr>
+                  <div className="card mb0" key={r.id}>
+                    <div className="row" style={{ alignItems: "flex-start" }}>
+                      <div>
+                        <h3 className="mb0"><Link to={`/teacher/rooms/${r.id}`} style={{ textDecoration: "none" }}>{r.name}</Link></h3>
+                        <div className="small">{r.room_type === "single_class" ? "Single class" : "Mixed class"} · {r.member_count} student{r.member_count === 1 ? "" : "s"}</div>
+                      </div>
+                      <Link className="btn secondary small-btn" to={`/teacher/rooms/${r.id}`}>Open</Link>
+                    </div>
+                    <div className="mt small">Join code</div>
+                    <span className="code">{r.join_code}</span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+
+              <form className="card stack" onSubmit={create}>
+                <h3>Create a room</h3>
+                <div className="grid2">
+                  <div><label htmlFor="rn">Room name</label><input id="rn" className="input" value={name} required minLength={2} maxLength={100} placeholder="e.g. Class 9 Science" onChange={(e) => setName(e.target.value)} /></div>
+                  <div>
+                    <label htmlFor="rt">Room type</label>
+                    <select id="rt" className="input" value={type} onChange={(e) => setType(e.target.value)}>
+                      <option value="single_class">Single class (one grade)</option>
+                      <option value="mixed_class">Mixed class (several grades)</option>
+                    </select>
+                  </div>
+                </div>
+                <ErrorNote error={error} />
+                <div><button className="btn" disabled={busy}>{busy ? "Creating..." : "Create room"}</button></div>
+              </form>
+            </>
           )}
-        </div>
+        </Async>
       </div>
-    </div>
+    </>
   );
 }
