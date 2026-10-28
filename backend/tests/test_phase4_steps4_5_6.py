@@ -25,6 +25,19 @@ class ScriptedGraderLLM:
         return self.replies.pop(0)
 
 
+def _request_and_approve_room(client, room, student_headers, teacher_headers):
+    response = client.post("/student/rooms/join", headers=student_headers, json={"join_code": room["join_code"]})
+    assert response.status_code == 202, response.text
+    listed = client.get(f"/teacher/rooms/{room['id']}/join-requests", headers=teacher_headers)
+    assert listed.status_code == 200, listed.text
+    request_id = listed.json()[0]["id"]
+    approved = client.post(
+        f"/teacher/rooms/{room['id']}/join-requests/{request_id}/approve",
+        headers=teacher_headers,
+    )
+    assert approved.status_code == 200, approved.text
+
+
 def _seed_grading_world(db):
     t1 = User(supertokens_user_id="st-t1-p4s4", name="Teacher 1", username="t1p4s4", phone="9400000001", role=Role.teacher)
     s1 = User(supertokens_user_id="st-s1-p4s4", name="Student 1", username="s1p4s4", phone="9400000002", role=Role.student, link_code="P4S4CD01")
@@ -121,7 +134,7 @@ def test_hybrid_quiz_submit_updates_unified_mastery_and_propagates_weak_flags(cl
 
     t1, s1 = w["t1"], w["s1"]
     room = client.post("/teacher/rooms", headers=t1, json={"name": "Gravitation Room", "room_type": "single_class"}).json()
-    client.post("/student/rooms/join", headers=s1, json={"join_code": room["join_code"]})
+    _request_and_approve_room(client, room, s1, t1)
     client.post(f"/student/books/{w['book_id']}/link", headers=s1)
 
     # Teacher generates a quiz scoped to Concept 1 (Universal Law of Gravitation) so Concept 2 and Concept 3 are unmeasured dependents

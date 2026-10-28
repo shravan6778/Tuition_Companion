@@ -262,8 +262,20 @@ def make_room(client, headers, room_type="single_class"):
     return client.post("/teacher/rooms", json={"name": "Class 9A", "room_type": room_type}, headers=headers).json()
 
 
-def join(client, room, headers):
-    assert client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=headers).status_code == 200
+def join(client, room, headers, teacher_headers):
+    """Request room access and approve it through the public teacher API."""
+    response = client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=headers)
+    assert response.status_code == 202, response.text
+    listed = client.get(f"/teacher/rooms/{room['id']}/join-requests", headers=teacher_headers)
+    assert listed.status_code == 200, listed.text
+    pending = listed.json()
+    assert pending, "the join request should be visible to the room's teacher"
+    request_row = pending[0]
+    approved = client.post(
+        f"/teacher/rooms/{room['id']}/join-requests/{request_row['id']}/approve",
+        headers=teacher_headers,
+    )
+    assert approved.status_code == 200, approved.text
 
 
 def test_bulk_link_a_book_to_every_student_in_a_single_class_room(client, session_factory):
@@ -271,7 +283,7 @@ def test_bulk_link_a_book_to_every_student_in_a_single_class_room(client, sessio
     students = [make_user(session_factory, Role.student, f"student{i}")[1] for i in (1, 2, 3)]
     room = make_room(client, th)
     for h in students[:2]:
-        join(client, room, h)
+        join(client, room, h, th)
     ref_id, mine = reference_book(session_factory), new_book(client, th)
 
     url = lambda book: f"/teacher/rooms/{room['id']}/books/{book}/link"
@@ -281,7 +293,7 @@ def test_bulk_link_a_book_to_every_student_in_a_single_class_room(client, sessio
     assert {b["id"] for b in client.get("/student/books", headers=students[0]).json()} == {ref_id, mine["id"]}
     assert client.get("/student/books", headers=students[2]).json() == []  # not in the room: untouched
 
-    join(client, room, students[2])  # joins later: not auto-linked (links stay per-student)
+    join(client, room, students[2], th)  # joins later: not auto-linked (links stay per-student)
     assert client.get("/student/books", headers=students[2]).json() == []
     assert client.post(url(ref_id), headers=th).json() == {"linked": 1, "already_linked": 2, "total_students": 3}
 
@@ -308,7 +320,7 @@ def setup_requests(client, session_factory):
     _, sh = make_user(session_factory, Role.student, "student1")
     book = new_book(client, th)
     room = make_room(client, th)
-    join(client, room, sh)
+    join(client, room, sh, th)
     client.post(f"/student/books/{book['id']}/link", headers=sh)
     return th, sh, book
 

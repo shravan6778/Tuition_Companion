@@ -2,6 +2,19 @@
 from app.models import Book, Chapter, ChapterStatus, Concept, ConceptEdge, Page, Role, User
 
 
+def _request_and_approve_room(client, room, student_headers, teacher_headers):
+    response = client.post("/student/rooms/join", headers=student_headers, json={"join_code": room["join_code"]})
+    assert response.status_code == 202, response.text
+    listed = client.get(f"/teacher/rooms/{room['id']}/join-requests", headers=teacher_headers)
+    assert listed.status_code == 200, listed.text
+    request_id = listed.json()[0]["id"]
+    approved = client.post(
+        f"/teacher/rooms/{room['id']}/join-requests/{request_id}/approve",
+        headers=teacher_headers,
+    )
+    assert approved.status_code == 200, approved.text
+
+
 def _seed_world(db):
     t1 = User(supertokens_user_id="st-t1-p4s2", name="Teacher 1", username="t1p4s2", phone="9200000001", role=Role.teacher)
     t2 = User(supertokens_user_id="st-t2-p4s2", name="Teacher 2", username="t2p4s2", phone="9200000002", role=Role.teacher)
@@ -67,8 +80,8 @@ def test_teacher_generates_quiz_and_assigns_to_room_with_tenant_isolation(client
     assert room_res.status_code == 201
     room = room_res.json()
 
-    client.post("/student/rooms/join", headers=s1, json={"join_code": room["join_code"]})
-    client.post("/student/rooms/join", headers=s3, json={"join_code": room["join_code"]})
+    _request_and_approve_room(client, room, s1, t1)
+    _request_and_approve_room(client, room, s3, t1)
     client.post(f"/student/books/{book_id}/link", headers=s1)
 
     # T1 generates a Short (10-question) chapter quiz and assigns it directly to the room
@@ -144,7 +157,7 @@ def test_teacher_concept_level_quiz_and_separate_assign_endpoint(client, session
     cids = w["concept_ids"][:2]
 
     room = client.post("/teacher/rooms", headers=t1, json={"name": "Class 9B", "room_type": "single_class"}).json()
-    client.post("/student/rooms/join", headers=s1, json={"join_code": room["join_code"]})
+    _request_and_approve_room(client, room, s1, t1)
     client.post(f"/student/books/{book_id}/link", headers=s1)
 
     # Generate an unassigned Medium (20-question) concept-scoped quiz first

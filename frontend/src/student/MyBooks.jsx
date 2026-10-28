@@ -8,8 +8,11 @@ import {
 } from "../api/content";
 import {
   approveParentLink,
+  cancelRoomRequest,
   getMyRooms,
   joinRoom,
+  leaveRoom,
+  listMyRoomRequests,
   listParentLinks,
   removeParentLink,
   unlinkMyBook,
@@ -111,6 +114,7 @@ function Books({ linked, available, reload }) {
 
 function Rooms({ rooms, reload }) {
   const [code, setCode] = useState("");
+  const requests = useLoad(listMyRoomRequests);
   const { busy, error, run } = useSubmit();
   return (
     <div className="card stack">
@@ -122,6 +126,11 @@ function Rooms({ rooms, reload }) {
           {rooms.map((r) => (
             <span className="chip" key={r.id}>
               {r.name}
+              <button type="button" className="btn ghost small-btn" disabled={busy} onClick={() => {
+                if (window.confirm(`Leave ${r.name}? Your mastery history will be kept.`)) {
+                  run(async () => { await leaveRoom(r.id); reload(); });
+                }
+              }}>Leave</button>
             </span>
           ))}
         </div>
@@ -134,12 +143,12 @@ function Rooms({ rooms, reload }) {
           run(async () => {
             await joinRoom(code.trim());
             setCode("");
-            reload();
+            requests.reload();
           });
         }}
       >
         <div style={{ flex: 1 }}>
-          <label htmlFor="join">Join a room with your teacher's code</label>
+          <label htmlFor="join">Request to join a room with your teacher's code</label>
           <input
             id="join"
             className="input"
@@ -159,6 +168,19 @@ function Rooms({ rooms, reload }) {
           Join
         </button>
       </form>
+      <div className="stack">
+        <h3 className="mb0">Pending requests</h3>
+        <Async state={requests}>
+          {(items) => items.length === 0 ? <p className="small mb0">No pending room requests.</p> : (
+            <div className="items">{items.map((r) => (
+              <div className="item row" key={r.id}>
+                <div><strong>{r.room_name}</strong><div className="small">Waiting for teacher approval</div></div>
+                <button type="button" className="btn ghost small-btn" disabled={busy} onClick={() => run(async () => { await cancelRoomRequest(r.room_id); requests.reload(); })}>Cancel request</button>
+              </div>
+            ))}</div>
+          )}
+        </Async>
+      </div>
       <ErrorNote error={error} />
     </div>
   );

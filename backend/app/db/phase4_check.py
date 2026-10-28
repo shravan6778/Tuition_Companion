@@ -137,19 +137,29 @@ def setup_world(ctx: Ctx) -> list[Result]:
         return [("FAIL", "W1", f"room creation failed: {r_a.status_code} / {r_b.status_code}")]
     ctx.room_a, ctx.room_b = r_a.json(), r_b.json()
 
-    joins = [
-        ctx.call(s, "POST", "/student/rooms/join", json={"join_code": r["join_code"]}).status_code
-        for s, r in (("S1", ctx.room_a), ("S3", ctx.room_a), ("S2", ctx.room_b))
-    ]
+    joins: list[int] = []
+    approvals: list[int] = []
+    for student_key, room_data, teacher_key in (
+        ("S1", ctx.room_a, "tA"), ("S3", ctx.room_a, "tA"), ("S2", ctx.room_b, "tB")
+    ):
+        joined = ctx.call(student_key, "POST", "/student/rooms/join", json={"join_code": room_data["join_code"]})
+        joins.append(joined.status_code)
+        if joined.status_code != 202:
+            approvals.append(joined.status_code)
+            continue
+        pending = ctx.call(teacher_key, "GET", f"/teacher/rooms/{room_data['id']}/join-requests")
+        request = next((r for r in pending.json() if r["student_id"] == str(ctx.users[student_key].id)), None) if pending.status_code == 200 else None
+        if request is None:
+            approvals.append(pending.status_code if pending.status_code != 200 else 404)
+            continue
+        approved = ctx.call(teacher_key, "POST", f"/teacher/rooms/{room_data['id']}/join-requests/{request['id']}/approve")
+        approvals.append(approved.status_code)
     link = ctx.call("S1", "POST", f"/student/books/{a.id}/link").status_code
     return [
         ("PASS", "W1", "two teachers each made a room"),
-        ok(
-            joins == [200, 200, 200] and link == 200,
-            "W2",
-            "S1 and S3 joined teacher A's room, S2 joined teacher B's; only S1 linked book A",
-            f"joins={joins}, link={link}",
-        ),
+        ok(joins == [202, 202, 202] and approvals == [200, 200, 200] and link == 200,
+           "W2", "S1 and S3 requested and were approved for teacher A's room, S2 for teacher B's; only S1 linked book A",
+           f"joins={joins}, approvals={approvals}, link={link}"),
     ]
 
 

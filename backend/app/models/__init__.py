@@ -9,7 +9,7 @@ from app.models.doubt import Doubt
 from app.models.links import ParentStudentLink
 from app.models.mastery import MasteryEvent
 from app.models.quiz import AnswerFormat, QuestionType, Quiz, QuizKind, QuizQuestion, QuizResponse
-from app.models.room import Room, RoomMember, RoomType
+from app.models.room import Room, RoomJoinRequest, RoomMember, RoomType
 from app.models.session_log import SessionLog
 from app.models.user import Role, User
 
@@ -31,6 +31,7 @@ __all__ = [
     "QuizResponse",
     "Role",
     "Room",
+    "RoomJoinRequest",
     "RoomMember",
     "RoomType",
     "SessionLog",

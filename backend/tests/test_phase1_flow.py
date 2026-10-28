@@ -38,11 +38,18 @@ def test_full_room_and_parent_flow(client, session_factory):
     assert len(room["join_code"]) == 6
 
     res = client.post("/student/rooms/join", json={"join_code": room["join_code"].lower()}, headers=sh)
-    assert res.status_code == 200
+    assert res.status_code == 202
     res = client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=sh)
     assert res.status_code == 409
     assert client.post("/student/rooms/join", json={"join_code": "ZZZZZZ"}, headers=sh).status_code == 404
 
+    assert client.get(f"/teacher/rooms/{room['id']}/members", headers=th).json() == []
+    requests = client.get(f"/teacher/rooms/{room['id']}/join-requests", headers=th).json()
+    assert len(requests) == 1 and requests[0]["student_name"] == "Test User"
+    approved = client.post(
+        f"/teacher/rooms/{room['id']}/join-requests/{requests[0]['id']}/approve", headers=th
+    )
+    assert approved.status_code == 200
     members = client.get(f"/teacher/rooms/{room['id']}/members", headers=th).json()
     assert [m["name"] for m in members] == ["Test User"]
     assert client.get("/teacher/rooms", headers=th).json()[0]["member_count"] == 1

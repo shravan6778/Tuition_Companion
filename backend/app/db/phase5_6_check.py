@@ -139,12 +139,27 @@ def setup_world(ctx: Ctx) -> list[Result]:
         return [("FAIL", "W1", f"room creation failed: {r_a.status_code} / {r_b.status_code}")]
     ctx.room_a, ctx.room_b = r_a.json(), r_b.json()
 
-    j1 = ctx.call("S1", "POST", "/student/rooms/join", json={"join_code": ctx.room_a["join_code"]}).status_code
-    j2 = ctx.call("S2", "POST", "/student/rooms/join", json={"join_code": ctx.room_b["join_code"]}).status_code
+    joins: list[int] = []
+    approvals: list[int] = []
+    for student_key, room_data, teacher_key in (("S1", ctx.room_a, "tA"), ("S2", ctx.room_b, "tB")):
+        joined = ctx.call(student_key, "POST", "/student/rooms/join", json={"join_code": room_data["join_code"]})
+        joins.append(joined.status_code)
+        if joined.status_code != 202:
+            approvals.append(joined.status_code)
+            continue
+        pending = ctx.call(teacher_key, "GET", f"/teacher/rooms/{room_data['id']}/join-requests")
+        request = next((r for r in pending.json() if r["student_id"] == str(ctx.users[student_key].id)), None) if pending.status_code == 200 else None
+        if request is None:
+            approvals.append(pending.status_code if pending.status_code != 200 else 404)
+            continue
+        approved = ctx.call(teacher_key, "POST", f"/teacher/rooms/{room_data['id']}/join-requests/{request['id']}/approve")
+        approvals.append(approved.status_code)
     link = ctx.call("S1", "POST", f"/student/books/{a.id}/link").status_code
     return [
         ("PASS", "W1", "two teachers each created a room"),
-        ok(j1 == 200 and j2 == 200 and link == 200, "W2", "S1 joined teacher A's room and linked book A; S2 joined teacher B's room", f"joins={j1}/{j2}, link={link}"),
+        ok(joins == [202, 202] and approvals == [200, 200] and link == 200, "W2",
+           "S1 requested and was approved for teacher A's room and linked book A; S2 was approved for teacher B's room",
+           f"joins={joins}, approvals={approvals}, link={link}"),
     ]
 
 

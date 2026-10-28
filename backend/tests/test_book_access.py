@@ -41,8 +41,20 @@ def new_chapter(client, headers, book_id) -> str:
 
 
 def join_room_of(client, session_factory, teacher_headers, student_headers):
+    """Create an approved membership for tests unrelated to the approval workflow."""
     room = client.post("/teacher/rooms", json={"name": "Room A", "room_type": "single_class"}, headers=teacher_headers).json()
-    assert client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=student_headers).status_code == 200
+    joined = client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=student_headers)
+    assert joined.status_code == 202, joined.text
+    requests = client.get(f"/teacher/rooms/{room['id']}/join-requests", headers=teacher_headers)
+    assert requests.status_code == 200, requests.text
+    pending = requests.json()
+    assert len(pending) == 1
+    approved = client.post(
+        f"/teacher/rooms/{room['id']}/join-requests/{pending[0]['id']}/approve",
+        headers=teacher_headers,
+    )
+    assert approved.status_code == 200, approved.text
+    return room
 
 
 # ---- teacher side -----------------------------------------------------------

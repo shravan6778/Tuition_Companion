@@ -38,7 +38,13 @@ def make_world(session_factory, with_exercise_vectors=False):
 def room_with_student(client, session_factory, th, tag="studenta", link_book=None):
     student, sh = make_user(session_factory, Role.student, tag)
     room = client.post("/teacher/rooms", json={"name": "Room One", "room_type": "single_class"}, headers=th).json()
-    assert client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=sh).status_code == 200
+    joined = client.post("/student/rooms/join", json={"join_code": room["join_code"]}, headers=sh)
+    assert joined.status_code == 202, joined.text
+    pending = client.get(f"/teacher/rooms/{room['id']}/join-requests", headers=th)
+    assert pending.status_code == 200, pending.text
+    request_id = pending.json()[0]["id"]
+    approved = client.post(f"/teacher/rooms/{room['id']}/join-requests/{request_id}/approve", headers=th)
+    assert approved.status_code == 200, approved.text
     if link_book:
         assert client.post(f"/student/books/{link_book}/link", headers=sh).status_code == 200
     return student, sh, room

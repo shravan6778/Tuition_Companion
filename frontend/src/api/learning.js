@@ -44,12 +44,22 @@ export const getChapterPages = (bookId, chapterId) => body(api.get(`/student/boo
 export const getStudentChapterGraph = (bookId, chapterId) => body(api.get(`/student/books/${bookId}/chapters/${chapterId}/graph`));
 export const getMyRooms = () => body(api.get("/student/rooms"));
 export const joinRoom = (code) => body(api.post("/student/rooms/join", { join_code: code }));
+export const listMyRoomRequests = () => body(api.get("/student/rooms/requests"));
+export const cancelRoomRequest = (roomId) => body(api.delete(`/student/rooms/${roomId}/join-request`));
+export const leaveRoom = (roomId) => body(api.delete(`/student/rooms/${roomId}/leave`));
 export const unlinkMyBook = (bookId) => body(api.delete(`/student/books/${bookId}/link`));
 
 // ---- teacher: rooms ----
 export const listRooms = () => body(api.get("/teacher/rooms"));
 export const createRoom = (name, roomType) => body(api.post("/teacher/rooms", { name, room_type: roomType }));
 export const listMembers = (roomId) => body(api.get(`/teacher/rooms/${roomId}/members`));
+export const listRoomJoinRequests = (roomId) => body(api.get(`/teacher/rooms/${roomId}/join-requests`));
+export const approveRoomJoinRequest = (roomId, requestId) => body(api.post(`/teacher/rooms/${roomId}/join-requests/${requestId}/approve`));
+export const rejectRoomJoinRequest = (roomId, requestId) => body(api.post(`/teacher/rooms/${roomId}/join-requests/${requestId}/reject`));
+export const removeRoomMember = (roomId, studentId) => body(api.delete(`/teacher/rooms/${roomId}/members/${studentId}`));
+export const regenerateRoomJoinCode = (roomId) => body(api.post(`/teacher/rooms/${roomId}/regenerate-join-code`));
+export const getRoomDeletePreview = (roomId) => body(api.get(`/teacher/rooms/${roomId}/delete-preview`));
+export const deleteRoom = (roomId, confirmName) => body(api.delete(`/teacher/rooms/${roomId}`, { data: { confirm_name: confirmName } }));
 
 // ---- teacher: assignments ----
 export const listAssignments = (params) => body(api.get(`/teacher/assignments${qs(params)}`));
