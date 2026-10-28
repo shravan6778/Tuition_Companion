@@ -14,6 +14,10 @@ from app.db.session import get_db
 from app.models.content import Book, Chapter, ChapterStatus, Page, student_book
 from app.models.room import Room, RoomMember
 from app.schemas import BookOut, ChapterGraphOut, JoinRoomIn, PageOut, RoomOut
+from datetime import datetime, timezone
+from app.models import ParentStudentLink, User
+from app.models.links import ParentLinkStatus
+from app.schemas import ParentLinkRequestOut
 
 def _student_view(book: Book) -> BookOut:
     """Students only see chapters that finished processing."""
@@ -132,3 +136,69 @@ def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends
 from app.student.request_routes import router as _request_router  # noqa: E402
 
 router.include_router(_request_router)
+
+def _parent_link_out(link: ParentStudentLink, parent: User) -> ParentLinkRequestOut:
+    return ParentLinkRequestOut(
+        id=link.id,
+        parent_id=parent.id,
+        parent_name=parent.name,
+        parent_username=parent.username,
+        status=link.status,
+        created_at=link.created_at,
+        approved_at=link.approved_at,
+    )
+
+
+@router.get("/parent-links", response_model=list[ParentLinkRequestOut])
+def list_parent_links(
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        select(ParentStudentLink, User)
+        .join(User, User.id == ParentStudentLink.parent_id)
+        .where(ParentStudentLink.student_id == student.id)
+        .order_by(ParentStudentLink.created_at.desc())
+    ).all()
+    return [_parent_link_out(link, parent) for link, parent in rows]
+
+
+@router.post("/parent-links/{link_id}/approve", response_model=ParentLinkRequestOut)
+def approve_parent_link(
+    link_id: uuid.UUID,
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    row = db.execute(
+        select(ParentStudentLink, User)
+        .join(User, User.id == ParentStudentLink.parent_id)
+        .where(ParentStudentLink.id == link_id, ParentStudentLink.student_id == student.id)
+    ).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Parent link request not found")
+    link, parent = row
+    if link.status != ParentLinkStatus.APPROVED:
+        link.status = ParentLinkStatus.APPROVED
+        link.approved_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(link)
+    return _parent_link_out(link, parent)
+
+
+@router.delete("/parent-links/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+def reject_or_remove_parent_link(
+    link_id: uuid.UUID,
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    link = db.scalar(
+        select(ParentStudentLink).where(
+            ParentStudentLink.id == link_id,
+            ParentStudentLink.student_id == student.id,
+        )
+    )
+    if link is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Parent link request not found")
+    db.delete(link)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

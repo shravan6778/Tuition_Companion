@@ -30,6 +30,8 @@ class DoubtIn(BaseModel):
     concept_id: uuid.UUID | None = None
     # Standalone "Ask a Doubt" (step 7): narrow the search to one chapter of a linked book. Not combined with an assignment.
     chapter_id: uuid.UUID | None = None
+    # Set for a follow-up such as "explain simpler"; it deliberately bypasses answer reuse.
+    parent_doubt_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def has_a_doubt(self):
@@ -101,6 +103,9 @@ class DoubtOut(BaseModel):
     sources: list[SourceOut] = []  # the pages the explanation is built from
     needs_review: bool = False
     note: str | None = None  # "auto-generated, please verify" when retrieval confidence was low
+    parent_doubt_id: uuid.UUID | None = None
+    reused: bool = False
+    reused_from_created_at: datetime | None = None
 
 
 class DoubtHistoryOut(BaseModel):
@@ -108,6 +113,11 @@ class DoubtHistoryOut(BaseModel):
     assignment_id: uuid.UUID | None
     text: str
     status: str
+    answer_status: str
+    answer: str | None = None
+    refresher: str | None = None
+    parent_doubt_id: uuid.UUID | None = None
+    chapter_id: uuid.UUID | None = None
     created_at: datetime
 
 
@@ -116,6 +126,29 @@ ANSWER_MESSAGES = {
     "unanswered": "Your book has related pages, but they don't answer this directly. Have a look at them below, or ask your teacher.",
     "failed": "We found the right pages but couldn't write an explanation just now. Have a look at the pages below and try again in a little while.",
 }
+
+
+def _reused_out(doubt: Doubt) -> DoubtOut:
+    """Return a cached answer without retrieval or an LLM call."""
+    asked_on = doubt.created_at.strftime("%Y-%m-%d")
+    return DoubtOut(
+        id=doubt.id,
+        assignment_id=doubt.assignment_id,
+        chapter_id=doubt.chapter_id,
+        status=doubt.status,
+        message=f"You asked this on {asked_on}. Here is the saved answer.",
+        confidence=round(doubt.confidence, 3),
+        threshold=settings.retrieval_min_similarity,
+        answer_status=doubt.answer_status,
+        answer=doubt.answer,
+        refresher=doubt.refresher,
+        sources=[],
+        needs_review=doubt.needs_review,
+        note=VERIFY_NOTE if doubt.needs_review else None,
+        parent_doubt_id=doubt.parent_doubt_id,
+        reused=True,
+        reused_from_created_at=doubt.created_at,
+    )
 
 
 def _out(outcome: service.DoubtOutcome, book_id: uuid.UUID | None) -> DoubtOut:
@@ -142,6 +175,7 @@ def _out(outcome: service.DoubtOutcome, book_id: uuid.UUID | None) -> DoubtOut:
         answer_status=doubt.answer_status, answer=doubt.answer, refresher=doubt.refresher,
         sources=[SourceOut(page_number=p.page_number, chapter_title=p.chapter_title) for p in (answer.sources if answer else [])],
         needs_review=doubt.needs_review, note=VERIFY_NOTE if doubt.needs_review else None,
+        parent_doubt_id=doubt.parent_doubt_id,
     )
 
 
@@ -159,8 +193,35 @@ def ask(body: DoubtIn, student=Depends(require_student), db: Session = Depends(g
         text = service.concept_doubt_text(db, student, body.concept_id)
         if text is None:
             raise HTTPException(404, "Concept not found")
+    if body.parent_doubt_id is not None:
+        parent = db.scalar(
+            select(Doubt).where(Doubt.id == body.parent_doubt_id, Doubt.student_id == student.id)
+        )
+        if parent is None:
+            raise HTTPException(404, "Parent doubt not found")
+        # A follow-up must point at an answered doubt; otherwise there is nothing useful to explain differently.
+        if parent.answer_status != "answered" or not parent.answer:
+            raise HTTPException(409, "This doubt does not have an answer to explain differently")
+
+    # Rate-limit every doubt request, including cache hits, so repeated cached
+    # requests cannot bypass the endpoint abuse limit. A cache hit still avoids
+    # retrieval and LLM work.
     limiter.check("doubt", str(student.id), settings.rate_doubts_per_hour, 3600)
-    return _out(service.raise_doubt(db, student, text, assignment, chapter), assignment.book_id if assignment else None)
+
+    if body.parent_doubt_id is None:
+        cached = service.find_reusable_answer(
+            db,
+            student,
+            text,
+            assignment_id=assignment.id if assignment else None,
+            chapter_id=chapter.id if chapter else None,
+        )
+        if cached is not None:
+            return _reused_out(cached)
+    return _out(
+        service.raise_doubt(db, student, text, assignment, chapter, parent_doubt_id=body.parent_doubt_id),
+        assignment.book_id if assignment else None,
+    )
 
 
 class PickConceptOut(BaseModel):
@@ -217,6 +278,19 @@ def ask_by_photo(file: UploadFile = File(...), assignment_id: uuid.UUID | None =
     limiter.check("doubt", str(student.id), settings.rate_doubts_per_hour, 3600)
     book_id = assignment.book_id if assignment else chapter.book_id if chapter else None
     if q.kind == DOUBT:
+        cached = service.find_reusable_answer(
+            db,
+            student,
+            q.text[: photo.TEXT_CAP],
+            assignment_id=assignment.id if assignment else None,
+            chapter_id=chapter.id if chapter else None,
+        )
+        if cached is not None:
+            return DoubtPhotoOut(
+                kind=DOUBT, words=q.words, text_read=shown,
+                message="We found your saved answer for this question.",
+                doubt=_reused_out(cached),
+            )
         outcome = service.raise_doubt(db, student, q.text[: photo.TEXT_CAP], assignment, chapter)
         return DoubtPhotoOut(kind=DOUBT, words=q.words, text_read=shown, message="Here is what we found for your photo.",
                              doubt=_out(outcome, book_id))
@@ -240,8 +314,21 @@ def my_doubts(assignment_id: uuid.UUID | None = None, student=Depends(require_st
     query = select(Doubt).where(Doubt.student_id == student.id)
     if assignment_id is not None:
         query = query.where(Doubt.assignment_id == assignment_id)
-    return [DoubtHistoryOut(id=d.id, assignment_id=d.assignment_id, text=d.text, status=d.status, created_at=d.created_at)
-            for d in db.scalars(query.order_by(Doubt.created_at.desc()).limit(50))]
+    return [
+        DoubtHistoryOut(
+            id=d.id,
+            assignment_id=d.assignment_id,
+            chapter_id=d.chapter_id,
+            text=d.text,
+            status=d.status,
+            answer_status=d.answer_status,
+            answer=d.answer,
+            refresher=d.refresher,
+            parent_doubt_id=d.parent_doubt_id,
+            created_at=d.created_at,
+        )
+        for d in db.scalars(query.order_by(Doubt.created_at.desc()).limit(50))
+    ]
 
 
 # ---- standalone "Ask a Doubt": what the student can browse (step 7) ------------------------------------------------

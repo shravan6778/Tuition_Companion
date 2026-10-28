@@ -63,6 +63,47 @@ def client(session_factory):
     yield TestClient(app)
     app.dependency_overrides.clear()
     
+
+@pytest.fixture()
+def db_session(session_factory):
+    with session_factory() as db:
+        yield db
+
+
+@pytest.fixture()
+def make_user(session_factory):
+    counter = {"n": 0}
+
+    def _make(role, phone=None, name="Test User"):
+        counter["n"] += 1
+        suffix = f"{counter['n']:04d}"
+        phone = phone or f"+91900000{suffix}"
+        with session_factory() as db:
+            user = __import__("app.models", fromlist=["User"]).User(
+                supertokens_user_id=f"st-{phone}",
+                name=name,
+                username=f"{role.value}_fixture_{suffix}",
+                phone=phone,
+                role=role,
+                link_code=(f"LINK{suffix}" if role.value == "student" else None),
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            db.expunge(user)
+        return user
+
+    return _make
+
+
+@pytest.fixture()
+def as_user(client):
+    def _as_user(user_or_headers):
+        headers = user_or_headers if isinstance(user_or_headers, dict) else {"Authorization": f"Bearer {user_or_headers.supertokens_user_id}"}
+        client.headers.update(headers)
+        return headers
+    return _as_user
+
 @pytest.fixture(autouse=True)
 def tmp_storage(tmp_path, monkeypatch):
     """Uploads go to a throwaway folder, never the real storage dir."""

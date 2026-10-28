@@ -14,6 +14,7 @@ from app.assessment import mastery
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.doubts import tutor
+from app.doubts.query import normalize_doubt_text
 from app.doubts.retrieval import GROUNDED, NOT_IN_BOOK, OUTSIDE, UNAVAILABLE, RetrievalResult, Scope, retrieve, scope_for_concepts
 from app.embeddings import get_embedding_provider
 from app.graph_store import get_graph_store
@@ -116,20 +117,124 @@ def _explain(db: Session, text: str, result: RetrievalResult, book_ids: list[uui
     return ("unanswered" if answer.cannot_answer else "answered"), answer
 
 
-def raise_doubt(db: Session, student: User, text: str, assignment: Optional[Assignment], chapter: Optional[Chapter] = None) -> DoubtOutcome:
+def find_reusable_answer(
+    db: Session,
+    student: User,
+    text: str,
+    assignment_id: Optional[uuid.UUID] = None,
+    chapter_id: Optional[uuid.UUID] = None,
+) -> Optional[Doubt]:
+    """Find an existing answered doubt that can safely be reused.
+
+    Reuse is deliberately scoped to the same student and the same assignment
+    or chapter.
+
+    Matching rules:
+    1. Exact normalized text is always reusable.
+    2. A shorter normalized question may reuse a longer previously answered
+       question when all of the shorter question's tokens occur in the
+       previous question.
+    3. The reverse is not allowed: a new, more specific question must not
+       reuse a shorter old answer.
+    4. Follow-up doubts are handled separately by the route and never reach
+       this function.
+    5. Assignment/chapter scope must match, preventing answers from one
+       assignment or chapter leaking into another.
+    """
+    normalized = normalize_doubt_text(text)
+
+    if not normalized:
+        return None
+
+    requested_tokens = normalized.split()
+
+    candidates = db.scalars(
+        select(Doubt)
+        .where(
+            Doubt.student_id == student.id,
+            Doubt.answer_status == "answered",
+            Doubt.assignment_id == assignment_id,
+            Doubt.chapter_id == chapter_id,
+        )
+        .order_by(Doubt.created_at.desc())
+        .limit(100)
+    ).all()
+
+    for candidate in candidates:
+        if not candidate.answer:
+            continue
+
+        candidate_normalized = (
+            candidate.normalized_text
+            or normalize_doubt_text(candidate.text)
+        )
+
+        if not candidate_normalized:
+            continue
+
+        # Fast path: exact normalized match.
+        if candidate_normalized == normalized:
+            return candidate
+
+        candidate_tokens = candidate_normalized.split()
+
+        # Controlled narrowing:
+        #
+        # "what is a tissue"
+        # is allowed to reuse
+        # "what is a tissue group of similar cells"
+        #
+        # But:
+        #
+        # "what is a tissue group of similar cells"
+        # must NOT reuse
+        # "what is a tissue"
+        #
+        # This keeps reuse conservative while supporting the existing
+        # repeated-doubt behavior.
+        if (
+            len(requested_tokens) >= 3
+            and len(requested_tokens) <= len(candidate_tokens)
+            and all(token in candidate_tokens for token in requested_tokens)
+        ):
+            return candidate
+
+    return None
+
+
+def raise_doubt(
+    db: Session,
+    student: User,
+    text: str,
+    assignment: Optional[Assignment],
+    chapter: Optional[Chapter] = None,
+    parent_doubt_id: Optional[uuid.UUID] = None,
+) -> DoubtOutcome:
     """A doubt is scoped by its assignment, by a chosen chapter (standalone "Ask a Doubt"), or not at all (every linked book)."""
     if assignment is not None and chapter is not None:
         raise ValueError("a doubt has an assignment or a chapter, not both")
     scope = assignment_scope(db, assignment) if assignment is not None else chapter_scope(chapter) if chapter is not None else None
     embedder, store = _providers()
     book_ids = linked_book_ids(db, student)
-    result = retrieve(db, text, embedder=embedder, store=store, book_ids=book_ids, scope=scope)
+    # Follow-ups retrieve the original question's evidence, then ask the Tutor to answer the follow-up instruction.
+    retrieval_text = text
+    if parent_doubt_id is not None:
+        parent = db.scalar(select(Doubt).where(Doubt.id == parent_doubt_id, Doubt.student_id == student.id))
+        if parent is None:
+            raise ValueError("parent doubt does not belong to this student")
+        retrieval_text = parent.text
+    result = retrieve(db, retrieval_text, embedder=embedder, store=store, book_ids=book_ids, scope=scope)
     best = result.concepts[0].concept_id if result.status == GROUNDED and result.concepts else None
     answer_status, answer = ("none", None)
     if result.status == GROUNDED:  # the ONLY status the Tutor is ever asked to answer
         answer_status, answer = _explain(db, text, result, book_ids)
     doubt = Doubt(
-        student_id=student.id, assignment_id=assignment.id if assignment else None, text=text, status=result.status,
+        student_id=student.id,
+        normalized_text=normalize_doubt_text(text),
+        parent_doubt_id=parent_doubt_id,
+        assignment_id=assignment.id if assignment else None,
+        chapter_id=chapter.id if chapter else None,
+        text=text, status=result.status,
         concept_id=uuid.UUID(best) if best else None, confidence=round(result.confidence, 4),
         created_at=datetime.now(timezone.utc),  # microsecond order, so history is stable on every database
         answer_status=answer_status, answer=answer.answer if answer else None, refresher=answer.refresher if answer else None,

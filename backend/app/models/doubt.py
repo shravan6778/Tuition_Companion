@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, Text, Uuid, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -11,6 +11,7 @@ from .base import Base
 class Doubt(Base):
     __tablename__ = "doubts"
     __table_args__ = (
+        Index("ix_doubts_student_normalized_text", "student_id", "normalized_text"),
         CheckConstraint("status IN ('grounded','outside_assignment','not_in_book','unavailable')", name="ck_doubt_status"),
     )
 
@@ -18,7 +19,18 @@ class Doubt(Base):
     student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     # None = a standalone doubt (no assignment). Deleting an assignment keeps the student's doubt history.
     assignment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("assignments.id", ondelete="SET NULL"), index=True, nullable=True)
+    # Standalone doubts may be narrowed to a specific chapter. Keeping this scope
+    # on the row prevents an answered doubt from being reused in a different chapter.
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chapters.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     text: Mapped[str] = mapped_column(Text)
+    # Canonical form used to reuse an already answered doubt without another retrieval/LLM call.
+    normalized_text: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # A follow-up (e.g. "explain simpler") points to the original doubt so the UI/API can show a thread.
+    parent_doubt_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("doubts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(20))
     concept_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("concepts.id", ondelete="SET NULL"), nullable=True)  # best concept hit when grounded
     confidence: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")  # best similarity inside the scope

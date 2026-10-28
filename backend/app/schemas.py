@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.models.room import RoomType
 
 
@@ -40,13 +42,11 @@ class JoinRoomIn(BaseModel):
     join_code: str = Field(min_length=6, max_length=12)
 
 
-# Replace the current MemberOut schema with this:
 class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID        # This is the User ID
     name: str            # This is the User name
     joined_at: datetime  # When they joined the room
-    
 
 
 class RoomBrief(BaseModel):
@@ -60,11 +60,69 @@ class LinkStudentIn(BaseModel):
     link_code: str = Field(min_length=4, max_length=12)
 
 
+# Aliases so any route/test importing LinkStudentRequest or LinkChildIn also works seamlessly
+LinkStudentRequest = LinkStudentIn
+LinkChildIn = LinkStudentIn
+
+
 class ChildOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     name: str
     rooms: list[RoomBrief] = []
+    status: str = "approved"
+
+
+# Alias so any route importing LinkedChildOut also works seamlessly
+LinkedChildOut = ChildOut
+
+
+class ParentLinkRequestOut(BaseModel):
+    id: uuid.UUID
+    parent_id: uuid.UUID
+    parent_name: str
+    parent_username: str
+    status: str  # pending | approved
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+
+
+class ParentDigestOut(BaseModel):
+    concepts_covered: int
+    checks_taken: int
+    quizzes_taken: int
+    pass_rate: Optional[float] = None
+    flagged_this_week: int
+
+
+class ParentWeakAreaOut(BaseModel):
+    concept_id: uuid.UUID
+    concept_name: str
+    status: str  # weak | at_risk
+    score: Optional[float] = None
+    reason: Optional[str] = None
+    last_checked: Optional[datetime] = None
+
+
+class ParentRecentEventOut(BaseModel):
+    id: int
+    kind: str  # check | quiz | doubt | propagated
+    concept_id: Optional[uuid.UUID] = None
+    concept_name: str
+    score: Optional[float] = None
+    asked: Optional[int] = None
+    correct: Optional[int] = None
+    reason: Optional[str] = None
+    created_at: datetime
+
+
+class ParentChildProgressOut(BaseModel):
+    digest: ParentDigestOut
+    weak: int
+    at_risk: int
+    ok: int
+    weak_areas: list[ParentWeakAreaOut] = []
+    recent: list[ParentRecentEventOut] = []
 
 
 # --- Book, Chapter, Page, Concept Schemas ---
@@ -110,9 +168,20 @@ class ChapterGraphOut(BaseModel):
     report: Optional[dict] = None
 
 
+class BookBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    board: str
+    class_name: str
+    subject: str
+    publisher: str
+    edition: Optional[str] = None
+    is_reference: bool = False
+
+
 class ChapterMatchOut(BaseModel):
     """One of YOUR chapters matching a chapter of a book you can see."""
-    book: "BookBrief"
+    book: BookBrief
     chapter_id: Optional[uuid.UUID] = None  # the matching chapter of that book
     chapter_title: Optional[str] = None
     kind: str  # "same" (near-identical pages) or "variant" (same content with edits)
@@ -129,7 +198,7 @@ class ChapterMatchesOut(BaseModel):
 
 
 class VariantSuggestionOut(BaseModel):
-    book: "BookBrief"
+    book: BookBrief
     kind: str  # "same" or "variant"
     coverage: float  # share of YOUR chapters that match a chapter of this book
     matched_chapters: int
@@ -139,17 +208,6 @@ class VariantSuggestionOut(BaseModel):
     matched_pages: int
     pages_checked: int
     signal: str = "pages"  # "pages" (text/meaning of the pages) or "structure" (same chapter titles in the same order; weaker evidence)
-
-
-class BookBrief(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID
-    board: str
-    class_name: str
-    subject: str
-    publisher: str
-    edition: Optional[str] = None
-    is_reference: bool = False
 
 
 class VariantOfIn(BaseModel):
@@ -170,7 +228,7 @@ class FrontPagesDraftOut(BaseModel):
     draft_id: uuid.UUID
     page_count: int
     metadata: BookMetadataOut  # what the system read; the teacher edits/confirms it
-    matches: list["BookBrief"]  # known books (official first) that already match this metadata
+    matches: list[BookBrief]  # known books (official first) that already match this metadata
     warning: Optional[str] = None  # set when nothing could be read from the pages, so the UI can say so
 
 
@@ -204,7 +262,7 @@ class ChapterRequestCreate(BaseModel):
 
 class ChapterRequestOut(BaseModel):
     id: uuid.UUID
-    book: "BookBrief"
+    book: BookBrief
     chapter_hint: str
     chapter_id: Optional[uuid.UUID] = None
     status: str
