@@ -1,8 +1,12 @@
 """Who may see / change which Book. Single source of truth for content tenancy (Rules.md §2, §4).
 
 - Reference books (NCERT etc.): readable by everyone, writable by no one through the API.
-- Private books: owned by exactly one teacher. A student can only see/link them if the student has
-  joined a room of that teacher. Nobody else ever sees them. Not-visible looks like "doesn't exist" (404).
+- Student books: uploaded by and owned by exactly one student. Only that student sees or links them. No other
+  student, no teacher and no parent ever does, whatever rooms anyone has joined. Not-visible looks like
+  "doesn't exist" (404).
+- Teacher-owned books (TRANSITIONAL): still readable by their teacher, and by students of that teacher's rooms,
+  until the upload routes move to the student side. That is the only branch of this module that still lets one
+  person see a book somebody else uploaded; it is deleted together with the teacher upload routes.
 """
 import uuid
 
@@ -45,19 +49,40 @@ def get_owned_book(db: Session, teacher: User, book_id: uuid.UUID) -> Book:
 # ---- student ---------------------------------------------------------------
 
 def student_visible_books(student: User) -> Select:
-    """Reference books + private books of any teacher whose room this student has joined."""
+    """Reference books + this student's own books (+ the TRANSITIONAL teacher branch below).
+
+    A student-owned book matches only `owner_student_id == student.id`, so no other student, teacher or parent
+    can ever see it, whatever rooms anyone has joined."""
+    # TRANSITIONAL, deleted when the upload routes move to the student side: teachers' private books for the
+    # student's rooms. Student-owned books never come through here (owner_teacher_id is NULL for them).
     my_teachers = (
         select(Room.teacher_id)
         .join(RoomMember, RoomMember.room_id == Room.id)
         .where(RoomMember.user_id == student.id)
     )
-    return select(Book).where(or_(Book.is_reference.is_(True), Book.owner_teacher_id.in_(my_teachers)))
+    return select(Book).where(or_(
+        Book.is_reference.is_(True),
+        Book.owner_student_id == student.id,
+        Book.owner_teacher_id.in_(my_teachers),
+    ))
 
 
 def get_book_visible_to_student(db: Session, student: User, book_id: uuid.UUID) -> Book:
     book = db.scalar(student_visible_books(student).where(Book.id == book_id))
     if book is None:
         raise _not_found()
+    return book
+
+
+def get_student_owned_book(db: Session, student: User, book_id: uuid.UUID) -> Book:
+    """For anything that changes a student's book (upload a chapter, remove the book)."""
+    book = db.get(Book, book_id)
+    if book is None:
+        raise _not_found()
+    if book.is_reference:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Reference books are read-only")
+    if book.owner_student_id != student.id:
+        raise _not_found()  # someone else's book looks like it doesn't exist
     return book
 
 

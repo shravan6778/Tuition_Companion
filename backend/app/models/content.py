@@ -15,9 +15,14 @@ student_book = Table(
 class Book(Base):
     __tablename__ = "books"
     __table_args__ = (
-        # A book is EITHER platform-wide reference content (no owner) OR a private upload owned by one teacher.
+        # A book is EITHER platform-wide reference content (no owner) OR a private book owned by exactly one student.
+        # TRANSITIONAL: a private book owned by one teacher is still accepted, only because the teacher upload
+        # routes have not been moved to the student side yet. That third branch and `owner_teacher_id` are removed
+        # in the same change that moves the uploads.
         CheckConstraint(
-            "(is_reference AND owner_teacher_id IS NULL) OR (NOT is_reference AND owner_teacher_id IS NOT NULL)",
+            "(is_reference AND owner_teacher_id IS NULL AND owner_student_id IS NULL)"
+            " OR (NOT is_reference AND owner_student_id IS NOT NULL AND owner_teacher_id IS NULL)"
+            " OR (NOT is_reference AND owner_teacher_id IS NOT NULL AND owner_student_id IS NULL)",
             name="ck_book_reference_xor_owner",
         ),
     )
@@ -33,6 +38,7 @@ class Book(Base):
     variant_of_id = Column(Uuid, ForeignKey("books.id"), nullable=True)
     is_reference = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
     owner_teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    owner_student_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)  # private book: only this student can see it
     metadata_source = Column(String(12), nullable=False, default="manual", server_default="manual")  # "front_pages" | "manual"
     extracted_metadata = Column(JSON, nullable=True)  # what the system read from the front pages, before the teacher edited it
     front_pages_file = Column(String, nullable=True)
