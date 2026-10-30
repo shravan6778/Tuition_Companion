@@ -158,8 +158,6 @@ def _out(outcome: service.DoubtOutcome, book_id: uuid.UUID | None) -> DoubtOut:
     message = ANSWER_MESSAGES.get(doubt.answer_status) or (service.CHAPTER_OUTSIDE if outcome.chapter is not None and result.status == OUTSIDE
                                                            else service.MESSAGES[result.status])
     request = None
-    if result.status == NOT_IN_BOOK and book_id is not None:
-        request = RequestChapterOut(book_id=book_id, path=f"/student/books/{book_id}/chapter-requests")
     return DoubtOut(
         id=doubt.id, assignment_id=doubt.assignment_id, chapter_id=outcome.chapter.id if outcome.chapter is not None else None,
         status=result.status, message=message,
@@ -220,7 +218,8 @@ def ask(body: DoubtIn, student=Depends(require_student), db: Session = Depends(g
             return _reused_out(cached)
     return _out(
         service.raise_doubt(db, student, text, assignment, chapter, parent_doubt_id=body.parent_doubt_id),
-        assignment.book_id if assignment else None,
+        (assignments.resolve_student_target(db, student, assignment)[0].id if assignment and assignments.resolve_student_target(db, student, assignment)[0] else None)
+        if assignment else (chapter.book_id if chapter else None),
     )
 
 
@@ -276,7 +275,7 @@ def ask_by_photo(file: UploadFile = File(...), assignment_id: uuid.UUID | None =
     if q.kind == TOO_SHORT:
         return DoubtPhotoOut(kind=TOO_SHORT, words=q.words, text_read=shown, message=RETAKE_MESSAGE)
     limiter.check("doubt", str(student.id), settings.rate_doubts_per_hour, 3600)
-    book_id = assignment.book_id if assignment else chapter.book_id if chapter else None
+    book_id = (assignments.resolve_student_target(db, student, assignment)[0].id if assignment and assignments.resolve_student_target(db, student, assignment)[0] else None) if assignment else (chapter.book_id if chapter else None)
     if q.kind == DOUBT:
         cached = service.find_reusable_answer(
             db,
@@ -298,7 +297,7 @@ def ask_by_photo(file: UploadFile = File(...), assignment_id: uuid.UUID | None =
     status = pick.result.status
     if pick.page_id is None or not pick.concepts:
         message = service.MESSAGES[status] if status != GROUNDED else service.MESSAGES["outside_assignment"]
-        request = RequestChapterOut(book_id=book_id, path=f"/student/books/{book_id}/chapter-requests") if status == NOT_IN_BOOK and book_id else None
+        request = None
         return DoubtPhotoOut(kind=PAGE, words=q.words, text_read=shown, message=message, status=status if pick.page_id is None else "outside_assignment",
                              request_chapter=request)
     top = pick.result.pages[0]

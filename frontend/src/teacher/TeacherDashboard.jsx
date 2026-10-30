@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { createRoom, listRooms } from "../api/learning";
 import Header from "../shared/Header";
 import { Async, Empty, ErrorNote, useLoad, useSubmit } from "../shared/ui";
-import ChapterRequests from "./ChapterRequests";
 
 export default function TeacherDashboard() {
   const state = useLoad(listRooms);
@@ -18,7 +17,7 @@ export default function TeacherDashboard() {
 
   return (
     <>
-      <Header title="Your rooms" subtitle="A room groups students. Open one to see its students, assign work and link books." />
+      <Header title="Your rooms" subtitle="A room groups students. Open one to see its students, assign work and inspect textbook outlines." />
       <div className="container">
         <Async state={state}>
           {(rooms) => (
@@ -27,8 +26,6 @@ export default function TeacherDashboard() {
                 <div className="tile"><div className="num">{rooms.length}</div><div className="lbl">Rooms</div></div>
                 <div className="tile"><div className="num">{rooms.reduce((n, r) => n + r.member_count, 0)}</div><div className="lbl">Students</div></div>
               </div>
-
-              <ChapterRequests refreshKey={rooms.length} />
 
               <div className="grid2" style={{ marginBottom: 16 }}>
                 {rooms.length === 0 && <div className="card mb0" style={{ gridColumn: "1 / -1" }}><Empty><p><strong>No rooms yet.</strong></p><p className="mb0">Create your first room below, then share its join code with your students.</p></Empty></div>}

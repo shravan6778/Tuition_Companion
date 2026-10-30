@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { bulkLinkBook, fetchBooks } from "../api/content";
+import { fetchBooks } from "../api/content";
 import {
   approveRoomJoinRequest, deleteRoom, getRoomDeletePreview, listMembers, listRoomJoinRequests,
   listRooms, listTeacherBooks, regenerateRoomJoinCode, rejectRoomJoinRequest, removeRoomMember,
@@ -81,57 +81,9 @@ function Work({ roomId }) {
 }
 
 // Search the platform-wide library, link a book to everyone in the room, or go upload one that's missing.
-function Library({ room }) {
-  const [q, setQ] = useState("");
-  const [term, setTerm] = useState("");
-  const state = useLoad(() => fetchBooks(term ? { q: term } : {}), [term]);
-  const [notes, setNotes] = useState({});
-  const { busy, error, run } = useSubmit();
-  const single = room.room_type === "single_class";
-
-  const link = (b) =>
-    run(async () => {
-      const r = await bulkLinkBook(room.id, b.id);
-      setNotes((n) => ({ ...n, [b.id]: `Linked for ${r.linked} student${r.linked === 1 ? "" : "s"}${r.already_linked ? `, ${r.already_linked} already had it` : ""}. Students who join later link it themselves.` }));
-    });
-
-  return (
-    <div className="stack">
-      {!single && <div className="callout info">This is a mixed class room, so books can't be linked to everyone at once. Students link the books they need themselves.</div>}
-      <form className="row gap-s" style={{ flexWrap: "nowrap" }} onSubmit={(e) => { e.preventDefault(); setTerm(q.trim()); }}>
-        <div style={{ flex: 1 }}>
-          <label htmlFor="lib-q">Search the library</label>
-          <input id="lib-q" className="input" value={q} placeholder="e.g. class 9 science ncert" onChange={(e) => setQ(e.target.value)} />
-        </div>
-        <button className="btn" style={{ alignSelf: "flex-end" }}>Search</button>
-      </form>
-      <ErrorNote error={error} />
-      <Async state={state}>
-        {(books) => books.length === 0 ? (
-          <div className="card"><Empty><p><strong>{term ? "No book matches that search." : "The library is empty."}</strong></p><p className="mb0">Can't find yours? <Link to="/teacher/library">Upload it in the Content Library</Link>.</p></Empty></div>
-        ) : (
-          <div className="card items mb0">
-            {books.map((b) => {
-              const ready = b.chapters.filter((c) => c.status === "ready").length;
-              return (
-                <div className="item" key={b.id}>
-                  <div className="row">
-                    <div>
-                      <strong>{b.board} · {bookLabel(b)}{b.edition ? `, ${b.edition}` : ""}</strong>
-                      <div className="small">{b.is_reference ? "Official" : "Yours"} · {ready} of {b.chapters.length} chapters ready</div>
-                    </div>
-                    {single && <button className="btn secondary small-btn" disabled={busy} onClick={() => link(b)}>Link to this room</button>}
-                  </div>
-                  {notes[b.id] && <div className="callout ok mt" role="status">{notes[b.id]}</div>}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Async>
-      <p className="small">Upload new books, add chapters and review the concept map in the <Link to="/teacher/library">full Content Library</Link>.</p>
-    </div>
-  );
+function Library() {
+  const books = useLoad(() => fetchBooks(), []);
+  return <div className="card stack"><h2>Reference library</h2><p className="small mb0">Teachers no longer upload or bulk-link textbooks. Students upload their own copies. This tab shows only the platform reference corpus.</p><Async state={books}>{(items) => items.length ? <div className="items">{items.map((b) => <div className="item" key={b.id}><strong>{b.board} · {bookLabel(b)}</strong><div className="small">{b.publisher}{b.edition ? ` · ${b.edition}` : ""}</div></div>)}</div> : <Empty>No reference books found.</Empty>}</Async></div>;
 }
 
 function RoomSettings({ room, onDeleted, onUpdated }) {
@@ -184,7 +136,7 @@ export default function RoomDetail() {
               {tab === "students" && <Students roomId={roomId} />}
               {tab === "work" && <Work roomId={roomId} />}
               {tab === "tests" && <QuizPanel target={{ room_id: roomId }} />}
-              {tab === "library" && <Library room={room} />}
+              {tab === "library" && <Library />}
               <div className="mt"><RoomSettings key={`${room.id}-${roomSettingsVersion}`} room={room} onUpdated={() => { setRoomSettingsVersion((v) => v + 1); rooms.reload(); }} onDeleted={() => { window.location.assign("/teacher"); }} /></div>
             </>
           ) : <div className="callout warn">Room not found.</div>}

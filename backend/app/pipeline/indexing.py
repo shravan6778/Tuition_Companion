@@ -187,7 +187,7 @@ def build_chapter_payload(db: Session, chapter: Chapter) -> ChapterGraph:
     models = {m for m, _ in vectors.values()}
     graph = ChapterGraph(
         book_id=str(book.id), chapter_id=str(chapter.id), title=chapter.title or "", sequence_num=chapter.sequence_num or 0,
-        is_reference=bool(book.is_reference), owner_teacher_id=str(book.owner_teacher_id) if book.owner_teacher_id else None,
+        is_reference=bool(book.is_reference), owner_student_id=str(book.owner_student_id) if book.owner_student_id else None,
         embedding_model=models.pop() if len(models) == 1 else None,
     )
     graph.pages = [

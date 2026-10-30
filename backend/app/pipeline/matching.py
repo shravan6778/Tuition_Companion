@@ -4,7 +4,7 @@ Thresholds (settings): >= reuse_similarity is the same page (reuse its concepts,
 variant_min_similarity..reuse_similarity is a page from a variant/edition of a known book.
 
 Privacy: concept reuse may use any book's page (the uploader already holds near-identical text, so nothing
-new is revealed). Book SUGGESTIONS are limited to books the uploading teacher can already see."""
+new is revealed). Book SUGGESTIONS are limited to books the uploading student can already see."""
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -26,7 +26,7 @@ class PageMatch:
     score: float
     book_id: uuid.UUID
     is_reference: bool
-    owner_teacher_id: Optional[uuid.UUID]
+    owner_student_id: Optional[uuid.UUID]
     chapter_id: Optional[uuid.UUID] = None
     chapter_title: Optional[str] = None
 
@@ -44,7 +44,7 @@ def find_matches(db: Session, signature: bytes, keys: Iterable[int]) -> list[Pag
     if not shared:
         return []
     rows = db.execute(
-        select(Page.id, Page.fingerprint, Book.id, Book.is_reference, Book.owner_teacher_id, Chapter.id, Chapter.title)
+        select(Page.id, Page.fingerprint, Book.id, Book.is_reference, Book.owner_student_id, Chapter.id, Chapter.title)
         .join(Chapter, Chapter.id == Page.chapter_id)
         .join(Book, Book.id == Chapter.book_id)
         .where(Page.id.in_([r.page_id for r in shared]))
@@ -58,9 +58,9 @@ def find_matches(db: Session, signature: bytes, keys: Iterable[int]) -> list[Pag
 
 
 def summarize_book_matches(
-    per_page: list[list[PageMatch]], pages_checked: int, own_book_id: uuid.UUID, teacher_id: uuid.UUID
+    per_page: list[list[PageMatch]], pages_checked: int, own_book_id: uuid.UUID, student_id: uuid.UUID
 ) -> list[dict]:
-    """Matches for ONE chapter: books (visible to the teacher, other than this one) with at least
+    """Matches for ONE chapter: books (visible to the student, other than this one) with at least
     variant_min_coverage of the chapter's fingerprinted pages matching, each with the chapter of that book
     that matches best. kind='same' if the matched pages are near-identical, else 'variant'."""
     if pages_checked == 0:
@@ -69,7 +69,7 @@ def summarize_book_matches(
     for matches in per_page:
         page_best: dict[uuid.UUID, PageMatch] = {}
         for m in matches:
-            visible = m.is_reference or m.owner_teacher_id == teacher_id
+            visible = m.is_reference or m.owner_student_id == student_id
             if visible and m.book_id != own_book_id and (m.book_id not in page_best or m.score > page_best[m.book_id].score):
                 page_best[m.book_id] = m
         for book_id, m in page_best.items():

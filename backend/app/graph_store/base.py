@@ -45,7 +45,7 @@ class ChapterGraph:
     title: str
     sequence_num: int
     is_reference: bool
-    owner_teacher_id: Optional[str]
+    owner_student_id: Optional[str]
     embedding_model: Optional[str]
     pages: list[PageNode] = field(default_factory=list)
     concepts: list[ConceptNode] = field(default_factory=list)  # canonical concepts only

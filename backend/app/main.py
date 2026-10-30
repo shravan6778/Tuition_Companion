@@ -15,12 +15,11 @@ from app.core.logging import setup_logging
 from app.doubts.routes import router as doubt_router
 from app.parent.routes import router as parent_router
 from app.student.routes import router as student_router
+from app.student.content_routes import router as student_content_router
 from app.teacher.routes import router as teacher_router
 from app.assessment.quiz_routes import student_practice_router, student_quiz_router, teacher_quiz_router
-from app.teacher import request_routes as teacher_request_routes
 from app.teacher import routes as teacher_routes
 from app.teacher import student_routes as teacher_student_routes
-from app.teacher import upload_routes as teacher_upload_routes
 
 setup_logging()
 init_supertokens()
@@ -54,11 +53,10 @@ app.include_router(auth_router)
 app.include_router(teacher_router)
 app.include_router(assignment_teacher_router)
 app.include_router(teacher_routes.router)
-app.include_router(teacher_upload_routes.router)
-app.include_router(teacher_request_routes.router)
 app.include_router(teacher_student_routes.router)
 app.include_router(admin_router)
 app.include_router(student_router)
+app.include_router(student_content_router)
 app.include_router(assignment_student_router)
 app.include_router(doubt_router)
 app.include_router(check_router)

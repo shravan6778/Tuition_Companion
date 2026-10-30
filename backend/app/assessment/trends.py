@@ -246,13 +246,13 @@ def build_student_trends(
             .join(Book, Book.id == Chapter.book_id)
             .where(
                 Concept.id.in_(concept_ids),
-                or_(Book.is_reference.is_(True), Book.owner_teacher_id == teacher.id),
+                or_(Book.is_reference.is_(True), Book.owner_student_id == student.id),
             )
         ).all()
         for c, ch, bk in rows:
             meta_map[c.id] = (c, ch, bk)
 
-    # Filter to concepts the teacher is permitted to see (or concepts whose book is official/teacher's own)
+    # Filter to concepts the teacher is permitted to see (or concepts whose book is official/the student's own)
     visible_cids = [cid for cid in concept_ids if cid in meta_map]
     states = mastery.current_state(db, student.id, visible_cids)
 

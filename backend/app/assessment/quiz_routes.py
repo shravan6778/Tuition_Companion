@@ -190,7 +190,7 @@ def _format_quiz_out(
     out = QuizOut(
         id=quiz.id,
         kind=quiz.kind,
-        book_id=quiz.book_id,
+        book_id=getattr(quiz, "_resolved_student_book_id", quiz.book_id),
         chapter_id=quiz.chapter_id,
         assignment_id=quiz.assignment_id,
         title=quiz.title,

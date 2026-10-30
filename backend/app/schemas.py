@@ -267,31 +267,6 @@ class WholeBookConfirmIn(BaseModel):
     chapters: list[ChapterRange]
 
 
-class BulkLinkOut(BaseModel):
-    linked: int
-    already_linked: int
-    total_students: int
-
-
-class ChapterRequestCreate(BaseModel):
-    chapter_hint: str = Field(min_length=3, max_length=200)
-    chapter_id: Optional[uuid.UUID] = None
-
-
-class ChapterRequestOut(BaseModel):
-    id: uuid.UUID
-    book: BookBrief
-    chapter_hint: str
-    chapter_id: Optional[uuid.UUID] = None
-    status: str
-    created_at: datetime
-    resolved_at: Optional[datetime] = None
-    student_name: Optional[str] = None  # only filled in for the teacher's view
-
-
-class FulfillRequestIn(BaseModel):
-    chapter_id: Optional[uuid.UUID] = None
-
 
 class PageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -317,6 +292,9 @@ class ChapterOut(BaseModel):
     sequence_num: int
     status: str = "empty"
     error_message: Optional[str] = None
+    # Safe metadata only; never page text/images. Filled by teacher-safe outline endpoints.
+    concept_names: list[str] = []
+    item_labels: list[str] = []
 
 
 class BookCreate(BaseModel):
@@ -328,7 +306,7 @@ class BookCreate(BaseModel):
     is_customized: bool = False
     school: Optional[str] = None
     variant_of_id: Optional[uuid.UUID] = None
-    draft_id: Optional[uuid.UUID] = None  # front-pages draft this Book is created from (see /teacher/book-drafts)
+    draft_id: Optional[uuid.UUID] = None  # front-pages draft this Book is created from (see /student/book-drafts)
 
 
 class BookOut(BaseModel):

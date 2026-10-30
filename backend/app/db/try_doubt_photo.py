@@ -39,7 +39,7 @@ def run(db, text: str, from_photo: bool, book_ids, chapter_ids, embedder, store)
     if r.status == "outside_assignment":
         out.append("  -> would offer the standalone Ask a Doubt: " + ", ".join(h.name for h in r.elsewhere))
     if r.status == "not_in_book":
-        out.append("  -> would say: this isn't in your book yet, ask your teacher to add it")
+        out.append("  -> would say: this isn't in your book yet, upload this chapter")
     return out
 
 

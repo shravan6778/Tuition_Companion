@@ -168,8 +168,8 @@ def _link_or_create_assignment(
 
     if assignment_id is not None:
         assignment = assignment_service.get_teacher_assignment(db, teacher, assignment_id)
-        if assignment.book_id != book.id:
-            raise HTTPException(422, "The assignment belongs to a different book")
+        if assignment.subject.casefold() != (book.subject or "").casefold():
+            raise HTTPException(422, "The assignment belongs to a different subject")
         return assignment
 
     if room_id is not None or student_id is not None:
@@ -182,13 +182,13 @@ def _link_or_create_assignment(
             teacher_id=teacher.id,
             room_id=target_room,
             student_id=target_student,
-            book_id=book.id,
-            chapter_id=chapter.id if chapter else None,
+            subject=book.subject,
+            chapter_title=chapter.title if chapter else None,
             level=level,
             title=title[:200],
             due_date=due_date,
         )
-        assignment.concepts = [AssignmentConcept(concept_id=c.id, position=i) for i, c in enumerate(concepts)]
+        assignment.concepts = [AssignmentConcept(concept_id=c.id, concept_name=c.name, concept_key=assignment_service.loose_key(c.name), position=i) for i, c in enumerate(concepts)]
         db.add(assignment)
         db.flush()
         return assignment
@@ -200,6 +200,8 @@ def generate_teacher_quiz(db: Session, teacher: User, spec: TeacherQuizSpec) -> 
     """Validates tenancy + scope, creates the Quiz (and optional Assignment), plans mixed-difficulty questions,
     and invokes the Quiz Agent to generate each question."""
     book = access.get_book_visible_to_teacher(db, teacher, spec.book_id)
+    # Teacher-generated quiz text may only be grounded in the platform reference corpus.
+    # Private student books are never turned into teacher-visible question text.
     count = resolve_teacher_question_count(spec.length, spec.question_count)
     chapter, concepts = _resolve_teacher_concepts(db, book, spec.chapter_id, spec.concept_ids)
 
@@ -312,10 +314,8 @@ def student_visible_quizzes_query(student: User):
       1. Their own self-triggered practice quizzes (`kind='practice'` and `student_id == student.id`) on linked books, OR
       2. Teacher-generated quizzes (`kind='teacher'`) linked to an assignment visible to this student (same room or
          assigned directly to this student, on a book the student has currently linked)."""
-    linked = select(student_book.c.book_id).where(student_book.c.student_id == student.id)
     visible_assignments = assignment_service.student_assignments_query(student).with_only_columns(Assignment.id)
     return select(Quiz).where(
-        Quiz.book_id.in_(linked),
         or_(
             (Quiz.kind == QuizKind.PRACTICE) & (Quiz.student_id == student.id),
             (Quiz.kind == QuizKind.TEACHER) & (Quiz.assignment_id.in_(visible_assignments)),
@@ -327,6 +327,14 @@ def get_student_quiz(db: Session, student: User, quiz_id: uuid.UUID) -> Quiz:
     quiz = db.scalar(student_visible_quizzes_query(student).where(Quiz.id == quiz_id))
     if quiz is None:
         raise _404("Quiz")
+    if quiz.kind == QuizKind.TEACHER and quiz.assignment_id is not None:
+        assignment = assignment_service.get_student_assignment(db, student, quiz.assignment_id)
+        book, chapter = assignment_service.resolve_student_target(db, student, assignment)
+        if assignment.chapter_title and chapter is None:
+            raise HTTPException(409, "Upload this chapter to see this task.")
+        if book is not None:
+            # The quiz response layer resolves the target to this student's own copy.
+            quiz._resolved_student_book_id = book.id
     return quiz
 
 
@@ -353,7 +361,9 @@ def _resolve_student_practice_pool(
 ) -> tuple[Book, Optional[Chapter], list[Concept], list[uuid.UUID]]:
     """Returns `(primary_book, optional_chapter, candidate_concepts, allowed_book_ids)` for a student's practice quiz.
     Strictly enforces that any requested `book_id` or `chapter_id` belongs to a book the student has LINKED (404 otherwise)."""
-    linked_ids = list(db.scalars(select(student_book.c.book_id).where(student_book.c.student_id == student.id)))
+    linked_ids = list(db.scalars(select(Book.id).where(Book.owner_student_id == student.id)))
+    linked_ids += list(db.scalars(select(student_book.c.book_id).where(student_book.c.student_id == student.id)))
+    linked_ids = list(dict.fromkeys(linked_ids))
     if book_id is not None and book_id not in set(linked_ids):
         raise _404("Book")
 

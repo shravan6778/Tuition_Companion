@@ -37,13 +37,17 @@ class Settings(BaseSettings):
     link_max_concepts: int = 120  # chapters with more concepts skip the LLM linking pass
     # --- uploads & requests (content_library/upload.py, link_requests.py)
     require_front_pages: bool = False  # True: a Book can only be created from confirmed front-page metadata
-    front_pages_max_pages: int = 8
+    front_pages_max_pages: int = 20
     # Comma-separated usernames of teachers who may also delete OFFICIAL books and chapters from the UI/API (empty = nobody).
     # Everyone else can only delete their own books and chapters. Example: ADMIN_USERNAMES=sandy
     admin_usernames: str = ""
     max_whole_book_mb: int = 100
     max_whole_book_chapters: int = 60
-    open_requests_per_student: int = 10
+    # Student-owned textbook upload limits (all keyed by student id).
+    rate_student_front_pages_per_hour: int = 10
+    rate_student_book_creates_per_hour: int = 5
+    rate_student_chapter_uploads_per_hour: int = 30
+    rate_student_whole_book_plans_per_hour: int = 5
     # --- rate limits (per user, per process; see core/ratelimit.py)
     rate_join_per_min: int = 10  # student room join codes (brute-forceable in principle)
     rate_parent_link_per_min: int = 10  # parent->student link codes

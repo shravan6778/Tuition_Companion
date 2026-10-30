@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -103,7 +103,7 @@ def leave_room(room_id: uuid.UUID, student=Depends(require_student), db: Session
 
 @router.get("/library", response_model=list[BookOut])
 def library(student=Depends(require_student), db: Session = Depends(get_db)):
-    """Books this student may link but hasn't yet: reference books + books of teachers whose room they joined."""
+    """Reference books the student has not linked yet. Private books are automatically owned/visible."""
     linked = select(student_book.c.book_id).where(student_book.c.student_id == student.id)
     query = access.student_visible_books(student).where(Book.id.not_in(linked))
     books = db.scalars(query.order_by(Book.is_reference.desc(), Book.board, Book.class_name, Book.subject)).all()
@@ -112,9 +112,10 @@ def library(student=Depends(require_student), db: Session = Depends(get_db)):
 
 @router.get("/books", response_model=list[BookOut])
 def my_books(student=Depends(require_student), db: Session = Depends(get_db)):
+    linked = select(student_book.c.book_id).where(student_book.c.student_id == student.id)
     books = db.scalars(
-        select(Book).join(student_book, student_book.c.book_id == Book.id)
-        .where(student_book.c.student_id == student.id)
+        select(Book).where(or_(Book.owner_student_id == student.id, Book.id.in_(linked)))
+        .order_by(Book.is_reference.desc(), Book.subject, Book.class_name)
     ).all()
     return [_student_view(b) for b in books]
 
@@ -127,6 +128,8 @@ def get_book_details(book_id: uuid.UUID, student=Depends(require_student), db: S
 @router.post("/books/{book_id}/link", status_code=status.HTTP_200_OK)
 def link_book(book_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
     book = access.get_book_visible_to_student(db, student, book_id)
+    if not book.is_reference:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Your own books are already available and do not need linking")
     existing = db.execute(
         select(student_book).where(student_book.c.student_id == student.id, student_book.c.book_id == book.id)
     ).first()
@@ -168,9 +171,6 @@ def get_chapter_graph(book_id: uuid.UUID, chapter_id: uuid.UUID, student=Depends
     return chapter_graph(db, chapter)
 
 
-from app.student.request_routes import router as _request_router  # noqa: E402
-
-router.include_router(_request_router)
 
 def _parent_link_out(link: ParentStudentLink, parent: User) -> ParentLinkRequestOut:
     return ParentLinkRequestOut(

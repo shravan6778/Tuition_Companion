@@ -27,7 +27,7 @@ def upgrade() -> None:
     op.create_table(
         'upload_drafts',
         sa.Column('id', sa.Uuid(), nullable=False),
-        sa.Column('teacher_id', sa.Uuid(), nullable=False),
+        sa.Column('student_id', sa.Uuid(), nullable=False),
         sa.Column('kind', sa.String(length=12), nullable=False),
         sa.Column('book_id', sa.Uuid(), nullable=True),
         sa.Column('source_file', sa.String(), nullable=False),
@@ -35,37 +35,14 @@ def upgrade() -> None:
         sa.Column('page_count', sa.Integer(), nullable=False),
         sa.Column('payload', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(['teacher_id'], ['users.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['book_id'], ['books.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id'),
-    )
-    op.create_index(op.f('ix_upload_drafts_teacher_id'), 'upload_drafts', ['teacher_id'], unique=False)
-
-    op.create_table(
-        'chapter_requests',
-        sa.Column('id', sa.Uuid(), nullable=False),
-        sa.Column('student_id', sa.Uuid(), nullable=False),
-        sa.Column('teacher_id', sa.Uuid(), nullable=False),
-        sa.Column('book_id', sa.Uuid(), nullable=False),
-        sa.Column('chapter_id', sa.Uuid(), nullable=True),
-        sa.Column('chapter_hint', sa.String(length=200), nullable=False),
-        sa.Column('status', sa.String(length=10), server_default='open', nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-        sa.Column('resolved_at', sa.DateTime(timezone=True), nullable=True),
-        sa.CheckConstraint("status IN ('open','fulfilled','dismissed','cancelled')", name='ck_chapter_request_status'),
         sa.ForeignKeyConstraint(['student_id'], ['users.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['teacher_id'], ['users.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['book_id'], ['books.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['chapter_id'], ['chapters.id'], ondelete='SET NULL'),
         sa.PrimaryKeyConstraint('id'),
     )
-    op.create_index(op.f('ix_chapter_requests_student_id'), 'chapter_requests', ['student_id'], unique=False)
-    op.create_index(op.f('ix_chapter_requests_teacher_id'), 'chapter_requests', ['teacher_id'], unique=False)
-    op.create_index(op.f('ix_chapter_requests_book_id'), 'chapter_requests', ['book_id'], unique=False)
+    op.create_index(op.f('ix_upload_drafts_student_id'), 'upload_drafts', ['student_id'], unique=False)
 
 
 def downgrade() -> None:
-    op.drop_table('chapter_requests')
     op.drop_table('upload_drafts')
     op.drop_column('books', 'front_pages_file')
     op.drop_column('books', 'extracted_metadata')

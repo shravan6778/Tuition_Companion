@@ -28,7 +28,7 @@ def run(db, text: str, book_ids, chapter_ids, embedder, store, llm) -> list[str]
     if r.status != GROUNDED:
         return out + ["-> the Tutor is not asked; the student is told: " + {
             "outside_assignment": "not part of this assignment, try Ask a Doubt",
-            "not_in_book": "not in your book yet, ask your teacher to add it",
+            "not_in_book": "not in your book yet, upload this chapter",
             "unavailable": "couldn't look this up right now"}[r.status], ""]
     pages = r.pages[: settings.tutor_max_pages]
     for i, p in enumerate(pages, 1):

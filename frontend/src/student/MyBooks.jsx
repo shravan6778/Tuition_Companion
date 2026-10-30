@@ -26,7 +26,7 @@ import {
   useLoad,
   useSubmit,
 } from "../shared/ui";
-import ChapterRequestPanel from "./ChapterRequestPanel";
+import StudentBookUpload from "./StudentBookUpload";
 
 function Books({ linked, available, reload }) {
   const [pick, setPick] = useState("");
@@ -44,19 +44,18 @@ function Books({ linked, available, reload }) {
             <div className="item" key={b.id}>
               <div className="row">
                 <strong>{bookLabel(b)}</strong>
-                <button
-                  className="btn ghost small-btn"
-                  disabled={busy}
-                  onClick={() =>
-                    window.confirm("Unlink this book? Your history is kept.") &&
-                    run(async () => {
-                      await unlinkMyBook(b.id);
-                      reload();
-                    })
-                  }
-                >
-                  Unlink
-                </button>
+                {!b.is_reference ? (
+                  <span className="small">Private to you</span>
+                ) : (
+                  <button
+                    className="btn ghost small-btn"
+                    disabled={busy}
+                    onClick={() =>
+                      window.confirm("Unlink this book? Your history is kept.") &&
+                      run(async () => { await unlinkMyBook(b.id); reload(); })
+                    }
+                  >Unlink</button>
+                )}
               </div>
               {b.chapters.length === 0 ? (
                 <p className="small mb0">No chapters are ready to read yet.</p>
@@ -107,7 +106,6 @@ function Books({ linked, available, reload }) {
         </div>
       )}
       <ErrorNote error={error} />
-      <ChapterRequestPanel linkedBooks={linked} />
     </div>
   );
 }
@@ -279,6 +277,7 @@ export default function MyBooks() {
                 available={available}
                 reload={state.reload}
               />
+              <StudentBookUpload books={linked} reload={state.reload} />
               <Rooms rooms={rooms} reload={state.reload} />
               <ParentLinks />
               <div className="card">

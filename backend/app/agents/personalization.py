@@ -163,7 +163,7 @@ def assemble_briefing_context(db: Session, teacher: User, student_id: uuid.UUID)
             Chapter.book_id.in_(linked_book_ids),
             Chapter.status == ChapterStatus.READY,
             Concept.is_canonical.is_(True),
-            or_(Book.is_reference.is_(True), Book.owner_teacher_id == teacher.id),
+            or_(Book.is_reference.is_(True), Book.owner_student_id == student.id),
         )
         .order_by(Chapter.sequence_num, Page.page_number, Concept.position)
         .limit(200)

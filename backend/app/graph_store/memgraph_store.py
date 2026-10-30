@@ -2,7 +2,7 @@
 
 Graph written per chapter:
 
-    (:Chapter {id, book_id, title, sequence_num, is_reference, owner_teacher_id})
+    (:Chapter {id, book_id, title, sequence_num, is_reference, owner_student_id})
     (:Page    {id, chapter_id, book_id, page_number, embedding, embedding_model})
     (:Concept {id, chapter_id, book_id, name, description, position, embedding, embedding_model})
     (Concept)-[:REQUIRES {source}]->(Concept)   # "needs this first": the prerequisite graph, a DAG
@@ -147,9 +147,9 @@ class MemgraphStore:
             tx.run("MATCH (n:Chapter {id: $cid}) DETACH DELETE n", cid=cid).consume()
             tx.run(
                 "CREATE (:Chapter {id: $cid, book_id: $bid, title: $title, sequence_num: $seq, "
-                "is_reference: $is_reference, owner_teacher_id: $owner})",
+                "is_reference: $is_reference, owner_student_id: $owner})",
                 cid=cid, bid=bid, title=graph.title, seq=graph.sequence_num,
-                is_reference=graph.is_reference, owner=graph.owner_teacher_id,
+                is_reference=graph.is_reference, owner=graph.owner_student_id,
             ).consume()
             for batch in _chunks(page_rows, self._batch):
                 tx.run(

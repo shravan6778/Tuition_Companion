@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createAssignment, exerciseProposal } from "../api/learning";
-import { fetchChapterGraph } from "../api/content";
+
 import { ErrorNote, pct, useSubmit } from "../shared/ui";
 import BookChapterSelect from "./BookChapterSelect";
 
@@ -30,6 +30,7 @@ export default function AssignmentForm({ books, roomId, studentId, onCreated }) 
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [pagesText, setPagesText] = useState("");
+  const [itemLabel, setItemLabel] = useState("");
   const [options, setOptions] = useState(null); // [{id, name, note}] the teacher ticks from
   const [chosen, setChosen] = useState(new Set());
   const [info, setInfo] = useState("");
@@ -42,15 +43,16 @@ export default function AssignmentForm({ books, roomId, studentId, onCreated }) 
     run(async () => {
       reset();
       if (level === "concept") {
-        const g = await fetchChapterGraph(sel.bookId, sel.chapterId);
-        setOptions(g.nodes.map((n) => ({ id: n.id, name: n.name, note: `page${n.pages.length > 1 ? "s" : ""} ${n.pages.join(", ")}` })));
+        const book = books.find((b) => b.id === sel.bookId);
+        const chapter = book?.chapters?.find((c) => c.id === sel.chapterId);
+        setOptions((chapter?.concept_names || []).map((name) => ({ id: name, name, note: "concept" })));
       } else {
         const p = await exerciseProposal({ book_id: sel.bookId, chapter_id: sel.chapterId, page_numbers: pagesText.trim() ? parsePages(pagesText) : undefined });
         if (p.status === "no_exercise_pages") setInfo("This chapter has no exercise pages. Pick ideas yourself with \"Specific ideas\" instead.");
         else if (p.status === "no_vectors") setInfo("This chapter isn't indexed yet, so we can't suggest ideas. Try again soon, or use \"Specific ideas\".");
         else setInfo(`Exercise on page${p.exercise_pages.length > 1 ? "s" : ""} ${p.exercise_pages.join(", ")}. Untick anything that doesn't belong.`);
-        setOptions(p.proposed.map((c) => ({ id: c.concept_id, name: c.name, note: `${pct(c.similarity)} match` })));
-        setChosen(new Set(p.proposed.map((c) => c.concept_id)));
+        setOptions(p.proposed.map((c) => ({ id: c.name, name: c.name, note: `${pct(c.similarity)} match` })));
+        setChosen(new Set(p.proposed.map((c) => c.name)));
       }
     });
 
@@ -59,15 +61,16 @@ export default function AssignmentForm({ books, roomId, studentId, onCreated }) 
     run(async () => {
       const body = {
         level, book_id: sel.bookId, room_id: roomId || undefined, student_id: studentId || undefined,
-        chapter_id: needsChapter ? sel.chapterId : undefined, title: title.trim() || undefined, due_date: due || undefined,
+        chapter_id: needsChapter ? sel.chapterId : undefined, item_label: level === "exercise" ? itemLabel.trim() || undefined : undefined,
+        title: title.trim() || undefined, due_date: due || undefined,
       };
       if (level === "concept" || level === "exercise") {
         if (chosen.size === 0) throw new Error("Tick at least one idea first.");
-        body.concept_ids = [...chosen];
+        body.concept_names = [...chosen];
       }
       if (level === "exercise" && pagesText.trim()) body.page_numbers = parsePages(pagesText);
       const created = await createAssignment(body);
-      reset(); setTitle(""); setDue(""); setPagesText("");
+      reset(); setTitle(""); setDue(""); setPagesText(""); setItemLabel("");
       onCreated?.(created);
     });
   };
@@ -95,9 +98,10 @@ export default function AssignmentForm({ books, roomId, studentId, onCreated }) 
           idPrefix={`af-${roomId || studentId}`} onChange={(v) => { setSel(v); reset(); }} />
         {level === "exercise" && (
           <div>
-            <label htmlFor="af-pages">Exercise pages (optional)</label>
-            <input id="af-pages" className="input" value={pagesText} placeholder="e.g. 12-14, 20" onChange={(e) => { setPagesText(e.target.value); reset(); }} />
-            <div className="small">Leave empty to use all the chapter's exercise pages.</div>
+            <label htmlFor="af-item">Exercise / item label</label>
+            <input id="af-item" className="input" list="af-item-options" value={itemLabel} placeholder="e.g. Exercise 9.5" onChange={(e) => { setItemLabel(e.target.value); reset(); }} />
+            <datalist id="af-item-options">{(books.find((b) => b.id === sel.bookId)?.chapters?.find((c) => c.id === sel.chapterId)?.item_labels || []).map((x) => <option key={x} value={x} />)}</datalist>
+            <div className="small">Choose a compact exercise label; no page text is shown.</div>
           </div>
         )}
         <div>

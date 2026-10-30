@@ -4,7 +4,7 @@
     python -m app.db.drop_book --book <book-id> --yes    # really delete it
 
 Deletes the book with all its chapters, pages, concepts, edges and embeddings, and its copy in the graph store.
-Official books only; teachers' books are deleted by their owners in the app."""
+Official books only; student-owned books are deleted by their owners in the app."""
 import argparse
 import uuid
 

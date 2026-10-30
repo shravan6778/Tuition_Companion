@@ -19,14 +19,15 @@ from app.doubts.retrieval import GROUNDED, NOT_IN_BOOK, OUTSIDE, UNAVAILABLE, Re
 from app.embeddings import get_embedding_provider
 from app.graph_store import get_graph_store
 from app.llm import get_llm_provider
-from app.models import Assignment, AssignmentLevel, Chapter, ChapterStatus, Concept, Doubt, Page, User, student_book
+from app.models import Assignment, AssignmentLevel, Book, Chapter, ChapterStatus, Concept, Doubt, Page, User, student_book
+from app.assignments import service as assignment_service
 
 logger = logging.getLogger(__name__)
 
 MESSAGES = {
     GROUNDED: "Found it in your book.",
     OUTSIDE: "That isn't part of this assignment, but your books do cover it. Try \"Ask a Doubt\" to look at it.",
-    NOT_IN_BOOK: "This isn't in your book yet. Ask your teacher to add it.",
+    NOT_IN_BOOK: "This isn't in your book yet. Upload this chapter to continue.",
     UNAVAILABLE: "We couldn't look this up right now. Please try again in a little while.",
 }
 
@@ -35,13 +36,24 @@ CHAPTER_OUTSIDE = "That isn't in the chapter you picked, but your books do cover
 
 
 def linked_book_ids(db: Session, student: User) -> list[uuid.UUID]:
-    return list(db.scalars(select(student_book.c.book_id).where(student_book.c.student_id == student.id)))
+    """All private books owned by the student plus explicitly linked reference books."""
+    own = select(Book.id).where(Book.owner_student_id == student.id)
+    refs = select(student_book.c.book_id).where(student_book.c.student_id == student.id)
+    return list(db.scalars(select(Book.id).where(Book.id.in_(own.union(refs)))))
 
 
-def assignment_scope(db: Session, assignment: Assignment) -> Scope:
-    """Chapter / subject level: the chapters its concepts sit in. Concept / exercise level: narrower, down to the
-    pages those concepts are explained on (`scope_for_concepts`)."""
-    concepts = list(db.scalars(select(Concept).where(Concept.id.in_([ac.concept_id for ac in assignment.concepts]))))
+def assignment_scope(db: Session, student: User, assignment: Assignment) -> Scope:
+    """Resolve the assignment's concept names against the student's own copy, never the source book ids."""
+    book, chapter = assignment_service.resolve_student_target(db, student, assignment)
+    if book is None:
+        return Scope()
+    if chapter is not None:
+        concepts = assignment_service.chapter_concepts(db, chapter.id)
+    else:
+        concepts = assignment_service.subject_concepts(db, [book.id], assignment.subject)
+    keys = {ac.concept_key for ac in assignment.concepts}
+    if keys:
+        concepts = [c for c in concepts if assignment_service.loose_key(c.name) in keys]
     if assignment.level in (AssignmentLevel.CONCEPT, AssignmentLevel.EXERCISE):
         return scope_for_concepts(db, concepts)
     chapter_ids = {str(db.get(Page, c.page_id).chapter_id) for c in concepts}
@@ -55,7 +67,7 @@ def chapter_scope(chapter: Chapter) -> Scope:
 
 def get_ready_chapter(db: Session, student: User, chapter_id: uuid.UUID) -> Optional[Chapter]:
     """A READY chapter of a book this student has linked, else None (the route answers 404, so a chapter of an unlinked or
-    another teacher's book, or one still processing, is indistinguishable from one that doesn't exist)."""
+    another student's book, or one still processing, is indistinguishable from one that doesn't exist)."""
     return db.scalar(select(Chapter).where(Chapter.id == chapter_id, Chapter.status == ChapterStatus.READY,
                                            Chapter.book_id.in_(linked_book_ids(db, student))))
 
@@ -213,7 +225,11 @@ def raise_doubt(
     """A doubt is scoped by its assignment, by a chosen chapter (standalone "Ask a Doubt"), or not at all (every linked book)."""
     if assignment is not None and chapter is not None:
         raise ValueError("a doubt has an assignment or a chapter, not both")
-    scope = assignment_scope(db, assignment) if assignment is not None else chapter_scope(chapter) if chapter is not None else None
+    if assignment is not None:
+        target_book, target_chapter = assignment_service.resolve_student_target(db, student, assignment)
+        if assignment.chapter_title and target_chapter is None:
+            raise HTTPException(409, "Upload this chapter to see this task.")
+    scope = assignment_scope(db, student, assignment) if assignment is not None else chapter_scope(chapter) if chapter is not None else None
     embedder, store = _providers()
     book_ids = linked_book_ids(db, student)
     # Follow-ups retrieve the original question's evidence, then ask the Tutor to answer the follow-up instruction.

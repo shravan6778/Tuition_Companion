@@ -2,7 +2,7 @@ from app.models.assignment import Assignment, AssignmentConcept, AssignmentLevel
 from app.models.base import Base
 from app.models.check import AssignmentCheck, CheckQuestion
 from app.models.content import (
-    Book, Chapter, ChapterRequest, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge,
+    Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge,
     IndexStatus, MatchFeedback, Page, PageBand, PageKind, UploadDraft, student_book,
 )
 from app.models.doubt import Doubt
@@ -38,7 +38,6 @@ __all__ = [
     "User",
     "Book",
     "Chapter",
-    "ChapterRequest",
     "ChapterStatus",
     "Concept",
     "ConceptEdge",

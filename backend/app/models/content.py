@@ -15,14 +15,9 @@ student_book = Table(
 class Book(Base):
     __tablename__ = "books"
     __table_args__ = (
-        # A book is EITHER platform-wide reference content (no owner) OR a private book owned by exactly one student.
-        # TRANSITIONAL: a private book owned by one teacher is still accepted, only because the teacher upload
-        # routes have not been moved to the student side yet. That third branch and `owner_teacher_id` are removed
-        # in the same change that moves the uploads.
+        # A book is EITHER platform-wide reference content OR a private student-owned book.
         CheckConstraint(
-            "(is_reference AND owner_teacher_id IS NULL AND owner_student_id IS NULL)"
-            " OR (NOT is_reference AND owner_student_id IS NOT NULL AND owner_teacher_id IS NULL)"
-            " OR (NOT is_reference AND owner_teacher_id IS NOT NULL AND owner_student_id IS NULL)",
+            "(is_reference AND owner_student_id IS NULL) OR (NOT is_reference AND owner_student_id IS NOT NULL)",
             name="ck_book_reference_xor_owner",
         ),
     )
@@ -37,8 +32,7 @@ class Book(Base):
     school = Column(String, nullable=True)
     variant_of_id = Column(Uuid, ForeignKey("books.id"), nullable=True)
     is_reference = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
-    owner_teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
-    owner_student_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)  # private book: only this student can see it
+    owner_student_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     metadata_source = Column(String(12), nullable=False, default="manual", server_default="manual")  # "front_pages" | "manual"
     extracted_metadata = Column(JSON, nullable=True)  # what the system read from the front pages, before the teacher edited it
     front_pages_file = Column(String, nullable=True)
@@ -255,12 +249,11 @@ class ContentEmbedding(Base):
 
 
 class UploadDraft(Base):
-    """A teacher's upload that waits for confirmation: front pages (-> new Book) or a whole-textbook PDF
-    (-> chapter split). Nothing heavy runs until the teacher confirms."""
+    """A student's upload waiting for confirmation: front pages or a whole-textbook PDF."""
     __tablename__ = "upload_drafts"
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
-    teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     kind = Column(String(12), nullable=False)  # "front_pages" | "whole_book"
     book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=True)
     source_file = Column(String, nullable=False)
@@ -270,19 +263,3 @@ class UploadDraft(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
-class ChapterRequest(Base):
-    """A student asking their teacher to add a chapter that isn't in the teacher's uploaded book yet."""
-    __tablename__ = "chapter_requests"
-    __table_args__ = (
-        CheckConstraint("status IN ('open','fulfilled','dismissed','cancelled')", name="ck_chapter_request_status"),
-    )
-
-    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
-    student_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    teacher_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)  # the book's owner
-    book_id = Column(Uuid, ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
-    chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True)
-    chapter_hint = Column(String(200), nullable=False)
-    status = Column(String(10), nullable=False, default="open", server_default="open")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    resolved_at = Column(DateTime(timezone=True), nullable=True)

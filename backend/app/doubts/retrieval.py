@@ -8,7 +8,7 @@
 `status` says what the caller may do:
   grounded            enough evidence inside the scope: the Tutor may answer from `pages` / `concepts`
   outside_assignment  nothing good inside the assignment, but the student's books do cover it: offer standalone "Ask a Doubt"
-  not_in_book         nothing good anywhere in the linked books: "ask your teacher to add it" (Rules.md §4: no ungrounded answer)
+  not_in_book         nothing good anywhere in the linked books: "upload this chapter" (Rules.md §4: no ungrounded answer)
   unavailable         the embedding service or graph store failed: say "couldn't do this right now", never guess
 
 Tenancy: the books are re-checked in PostgreSQL after the search (a page is returned only if its chapter is ready and

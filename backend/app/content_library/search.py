@@ -1,4 +1,4 @@
-"""Searching the library (official books + the teacher's own), and matching extracted metadata to known books."""
+"""Searching the library (official books + the current student's own), and matching extracted metadata to known books."""
 import re
 from typing import Optional
 
@@ -32,10 +32,8 @@ def search_books(
 ):
     """Books visible to this teacher, case-insensitive 'contains' on each filter; q searches all text fields."""
     query = access.teacher_visible_books(teacher)
-    if scope == "mine":
-        query = query.where(Book.owner_teacher_id == teacher.id)
-    elif scope == "reference":
-        query = query.where(Book.is_reference.is_(True))
+    # Teacher search is reference-only. The old "mine" scope is intentionally empty of private uploads.
+    query = query.where(Book.is_reference.is_(True))
     for column, value in ((Book.board, board), (Book.subject, subject), (Book.publisher, publisher)):
         if value and value.strip():
             query = query.where(func.lower(column).contains(value.strip().lower(), autoescape=True))
@@ -54,7 +52,7 @@ def search_books(
     return query.order_by(Book.is_reference.desc(), Book.board, Book.class_name, Book.subject)
 
 
-def match_metadata(db: Session, teacher: User, metadata) -> list[Book]:
+def match_metadata(db: Session, student: User, metadata) -> list[Book]:
     """Visible books that agree with what the front pages say: same class and subject (when stated), and
     >= 2 stated fields / >= 75% of them match overall. Official ones first. Class is compared as a number,
     so 'IX' equals 'Class 9'."""
@@ -70,7 +68,7 @@ def match_metadata(db: Session, teacher: User, metadata) -> list[Book]:
     if len(stated) < 2:
         return []
     scored = []
-    for book in db.scalars(access.teacher_visible_books(teacher)).all():
+    for book in db.scalars(access.student_visible_books(student)).all():
         have = {
             "board": normalize_name(book.board), "class": normalize_class(book.class_name),
             "subject": normalize_name(book.subject), "publisher": normalize_name(book.publisher),

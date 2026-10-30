@@ -1,9 +1,9 @@
 """Front-pages-first upload orchestration (Rules.md §3 / md 'Step 2').
 
 1. Front pages (cover + publisher/edition page): OCR + one small LLM call -> proposed metadata + known
-   books that already match it. Nothing is created until the teacher confirms (POST /teacher/books with draft_id).
-2. Then the content itself: chapter-by-chapter (teacher/routes.py) or the whole textbook at once, which is
-   split into chapters from the PDF's bookmarks or the teacher's page ranges and processed per chapter."""
+   books that already match it. Nothing is created until the student confirms (POST /student/books with draft_id).
+2. Then the content itself: chapter-by-chapter (student/routes.py) or the whole textbook at once, which is
+   split into chapters from the PDF's bookmarks or the student's page ranges and processed per chapter."""
 import io
 import logging
 import uuid
@@ -127,7 +127,7 @@ def validate_ranges(ranges: list[ChapterRange], page_count: int) -> list[Chapter
 
 # ---- step 1: front pages -> proposed metadata -------------------------------------------------------
 
-def create_front_pages_draft(db: Session, teacher: User, upload: ValidatedUpload):
+def create_front_pages_draft(db: Session, student: User, upload: ValidatedUpload):
     """Returns (draft, metadata, matching_books). Costs one OCR call + one small LLM call."""
     if upload.ext == "pdf":
         pages = len(open_pdf(upload.data).pages)
@@ -149,22 +149,22 @@ def create_front_pages_draft(db: Session, teacher: User, upload: ValidatedUpload
     metadata = extract_book_metadata(get_llm_provider(), text)  # ProcessingError -> 422 with a safe message
 
     draft = UploadDraft(
-        teacher_id=teacher.id, kind="front_pages", source_file=save_by_hash(upload.data, upload.sha256, upload.ext),
+        student_id=student.id, kind="front_pages", source_file=save_by_hash(upload.data, upload.sha256, upload.ext),
         source_sha256=upload.sha256, page_count=layout["page_count"] if "page_count" in layout else len(layout["pages"]),
         payload={"metadata": metadata.model_dump(), "text_chars": len(text)},
     )
     db.add(draft)
     db.commit()
-    return draft, metadata, match_metadata(db, teacher, metadata)
+    return draft, metadata, match_metadata(db, student, metadata)
 
 
 # ---- step 2b: whole textbook -> chapters ---------------------------------------------------------------
 
-def create_whole_book_plan(db: Session, teacher: User, book: Book, upload: ValidatedUpload):
+def create_whole_book_plan(db: Session, student: User, book: Book, upload: ValidatedUpload):
     reader = open_pdf(upload.data)
     proposed = outline_chapters(reader)
     draft = UploadDraft(
-        teacher_id=teacher.id, kind="whole_book", book_id=book.id,
+        student_id=student.id, kind="whole_book", book_id=book.id,
         source_file=save_by_hash(upload.data, upload.sha256, "pdf"), source_sha256=upload.sha256,
         page_count=len(reader.pages), payload={"proposed": [r.model_dump() for r in proposed]},
     )
@@ -173,9 +173,9 @@ def create_whole_book_plan(db: Session, teacher: User, book: Book, upload: Valid
     return draft, proposed
 
 
-def get_draft(db: Session, teacher: User, draft_id: uuid.UUID, kind: str, book_id: Optional[uuid.UUID] = None) -> UploadDraft:
+def get_draft(db: Session, student: User, draft_id: uuid.UUID, kind: str, book_id: Optional[uuid.UUID] = None) -> UploadDraft:
     draft = db.get(UploadDraft, draft_id)
-    if draft is None or draft.teacher_id != teacher.id or draft.kind != kind or (book_id and draft.book_id != book_id):
+    if draft is None or draft.student_id != student.id or draft.kind != kind or (book_id and draft.book_id != book_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Upload not found (it may have expired). Please upload it again.")
     return draft
 

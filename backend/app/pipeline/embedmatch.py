@@ -6,9 +6,8 @@ and embedded, uses only the vectors PostgreSQL already holds (no embedding calls
 adds SUGGESTIONS (`signal: "embedding"`) for books the fingerprint did not already suggest. It never reuses
 concepts or sets anything by itself: the teacher still confirms `variant_of`.
 
-Privacy: the same rule as the fingerprint suggestions. A teacher's chapter is compared with official books and
-with that teacher's own other books only; an official chapter only with other official books. Nothing here
-can name another teacher's book. The outcome is recorded in `chapter.match_report["embedding_match"]`."""
+Privacy: the same rule as the fingerprint suggestions. A student's chapter is compared with official books and that student's own other books only; an official
+chapter is compared only with other official books. Nothing here can name another student's book. The outcome is recorded in `chapter.match_report["embedding_match"]`."""
 import logging
 from collections import defaultdict
 
@@ -42,8 +41,8 @@ def compute(db: Session, chapter: Chapter) -> tuple[list[dict], dict]:
         return [], {"status": "no_vectors"}
     book = db.get(Book, chapter.book_id)
     visible = Book.is_reference.is_(True)
-    if book.owner_teacher_id is not None:
-        visible = or_(visible, and_(Book.is_reference.is_(False), Book.owner_teacher_id == book.owner_teacher_id))
+    if book.owner_student_id is not None:
+        visible = or_(visible, and_(Book.is_reference.is_(False), Book.owner_student_id == book.owner_student_id))
     rows = db.execute(
         select(ContentEmbedding, Chapter, Book)
         .join(Chapter, Chapter.id == ContentEmbedding.chapter_id).join(Book, Book.id == Chapter.book_id)

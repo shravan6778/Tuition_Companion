@@ -7,7 +7,7 @@ only as the doubt's text. Rules (Phases.md "Settled before building"):
                                       picks the concept that confused them (POST /student/doubts with that concept_id). No doubt is
                                       saved until they pick.
 Only photos of pages already inside the student's linked, processed books get an answer; an unseen page is `not_in_book`
-(the existing "ask your teacher to add a chapter" route), never processed on the fly."""
+(the student upload flow), never processed on the fly."""
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -52,7 +52,7 @@ class PagePick:
 def match_page(db: Session, student: User, text: str, assignment: Optional[Assignment], chapter: Optional[Chapter] = None) -> PagePick:
     """A whole photographed page: find the page in the student's books and list the concepts on it that the student can pick.
     Same scope and tenancy rules as any doubt (the student's own linked books; the assignment's scope when there is one)."""
-    scope = service.assignment_scope(db, assignment) if assignment is not None else service.chapter_scope(chapter) if chapter is not None else None
+    scope = service.assignment_scope(db, student, assignment) if assignment is not None else service.chapter_scope(chapter) if chapter is not None else None
     embedder, store = service._providers()
     result = retrieve(db, text, embedder=embedder, store=store, book_ids=service.linked_book_ids(db, student), scope=scope)
     if result.status != GROUNDED or not result.pages:

@@ -8,7 +8,7 @@ before a single chapter has been processed, and it only ever adds SUGGESTIONS (t
 `variant_of`). Exercise numbering, the other half of the original idea, is not used: it would need parsing page
 text and is too fragile to trust.
 
-Privacy: only official books and the teacher's own other books are compared, exactly like the page signals."""
+Privacy: only official books and the student's own other books are compared, exactly like the page signals."""
 import re
 
 from sqlalchemy import select
@@ -68,8 +68,8 @@ def _titles(db: Session, book_id, ready_only: bool) -> list[str]:
     return [t for (t,) in db.execute(query)]
 
 
-def suggest(db: Session, book: Book, teacher_id, exclude=frozenset()) -> list[dict]:
-    """Books (official, or the teacher's own) whose chapter titles follow the same order as `book`'s, best first.
+def suggest(db: Session, book: Book, student_id, exclude=frozenset()) -> list[dict]:
+    """Books (official, or the student's own) whose chapter titles follow the same order as `book`'s, best first.
     Needs >= structure_min_chapters in-order matches covering >= variant_min_coverage of this book's chapters.
     Only chapters that are already `ready` count on the OTHER side (an official book fills up over time)."""
     if not settings.structure_enabled:
@@ -78,7 +78,7 @@ def suggest(db: Session, book: Book, teacher_id, exclude=frozenset()) -> list[di
     if len(mine) < settings.structure_min_chapters:
         return []
     candidates = db.scalars(select(Book).where(
-        Book.id != book.id, (Book.is_reference.is_(True)) | (Book.owner_teacher_id == teacher_id)))
+        Book.id != book.id, (Book.is_reference.is_(True)) | (Book.owner_student_id == student_id)))
     found = []
     for other in candidates:
         if other.id in exclude:

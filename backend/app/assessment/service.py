@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.assessment import checks, mastery
 from app.core.config import settings
 from app.core.errors import ProcessingError
+from app.assignments import service as assignment_service
 from app.llm import get_llm_provider
 from app.models import Assignment, AssignmentCheck, CheckQuestion, Concept, Page, User
 
@@ -97,8 +98,20 @@ def start_check(db: Session, student: User, assignment: Assignment) -> Assignmen
         if any(q.status != "ready" for q in open_check.questions):
             _fill(db, open_check)
         return open_check
-    concept_ids = [str(ac.concept_id) for ac in assignment.concepts]
-    plan = checks.plan_check(concept_ids, priority_ids=_ask_first(db, student, [ac.concept_id for ac in assignment.concepts]))
+    book, chapter = assignment_service.resolve_student_target(db, student, assignment)
+    if assignment.chapter_title and chapter is None:
+        raise HTTPException(409, "Upload this chapter to see this task.")
+    if chapter is not None:
+        available = assignment_service.chapter_concepts(db, chapter.id)
+    elif book is not None:
+        available = assignment_service.subject_concepts(db, [book.id], assignment.subject)
+    else:
+        raise HTTPException(409, "Upload this chapter to see this task.")
+    wanted_keys = {ac.concept_key for ac in assignment.concepts}
+    if wanted_keys:
+        available = [c for c in available if assignment_service.loose_key(c.name) in wanted_keys]
+    concept_ids = [str(c.id) for c in available]
+    plan = checks.plan_check(concept_ids, priority_ids=_ask_first(db, student, [c.id for c in available]))
     if not plan:
         raise HTTPException(409, "This assignment has no concepts to check yet")
     check = AssignmentCheck(student_id=student.id, assignment_id=assignment.id, assignment_title=assignment.title, status=OPEN)

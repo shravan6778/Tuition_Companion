@@ -36,7 +36,7 @@ def reprocess(db_factory, book_id: uuid.UUID, chapter_number: int | None = None,
                 mark_processing(chapter)
                 targets.append(chapter.id)
         db.commit()
-        owner = book.owner_teacher_id
+        owner = book.owner_student_id
     for chapter_id in targets:
         run_chapter_job(chapter_id, owner, db_factory, fresh=fresh)
         with db_factory() as db:

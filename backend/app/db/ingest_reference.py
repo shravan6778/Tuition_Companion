@@ -67,7 +67,7 @@ def ingest(db_factory, pdf_bytes: bytes, *, board: str, class_name: str, subject
             book = dup
         else:
             book = Book(board=board, class_name=class_name, subject=subject, publisher=publisher,
-                        edition=edition, is_reference=True, owner_teacher_id=None, metadata_source="manual")
+                        edition=edition, is_reference=True, metadata_source="manual")
             db.add(book)
             db.flush()
         chapter_ids = []

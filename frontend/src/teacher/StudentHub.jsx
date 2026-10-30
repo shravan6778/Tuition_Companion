@@ -1,8 +1,9 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { listMembers, listRooms, listTeacherBooks } from "../api/learning";
+import { listMembers, listRooms } from "../api/learning";
 import Header from "../shared/Header";
 import { Async, Tabs, useLoad } from "../shared/ui";
 import AssignmentForm from "./AssignmentForm";
+import { fetchStudentBookOutlines } from "../api/content";
 import AssignmentList from "./AssignmentList";
 import QuizPanel from "./QuizPanel";
 import { STUDENT_TABS } from "./StudentTabConfig";
@@ -15,7 +16,13 @@ import {
 import { useState } from "react";
 
 function WorkTab({ studentId }) {
-  const books = useLoad(listTeacherBooks);
+  const books = useLoad(async () => {
+    const outlines = await fetchStudentBookOutlines(studentId);
+    return outlines.map((b) => ({
+      ...b,
+      chapters: (b.chapters || []).map((c) => ({ ...c, concept_names: c.concept_names || [], item_labels: c.item_labels || [] })),
+    }));
+  }, [studentId]);
   const [n, setN] = useState(0);
   return (
     <div className="stack">

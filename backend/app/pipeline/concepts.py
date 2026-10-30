@@ -48,6 +48,31 @@ def looks_like_summary_page(text: str) -> bool:
 _EXERCISE_HEADING = re.compile(r"^\W*(exercises?|review questions|questions)\b", re.I | re.M)
 
 
+_ITEM_LABEL = re.compile(
+    r"\b(?:exercise|ex\.?|question|q\.?|review\s+question)\s*([0-9]+(?:\.[0-9]+)*[a-z]?)\b",
+    re.I,
+)
+
+
+def extract_item_labels(text: str) -> list[str]:
+    """Return only compact exercise/question labels, never page text.
+
+    These labels are safe teacher-facing metadata such as ``Exercise 9.5``.
+    """
+    labels: list[str] = []
+    for match in _ITEM_LABEL.finditer((text or "")[:1200]):
+        prefix = match.group(0).strip()
+        # Normalize whitespace while preserving the short label only.
+        prefix = re.sub(r"\s+", " ", prefix)
+        if prefix.lower().startswith("ex"):
+            label = re.sub(r"^ex\.?", "Exercise", prefix, flags=re.I)
+        else:
+            label = prefix
+        if label not in labels:
+            labels.append(label[:80])
+    return labels
+
+
 def heading_page_kind(text: str) -> str | None:
     """'exercise' / 'recap' when the page STARTS with such a heading (first 250 chars), else None. Deterministic,
     so old chapters can be labelled without a model call (python -m app.db.backfill_page_kind)."""
