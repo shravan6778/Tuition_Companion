@@ -3,7 +3,7 @@ from app.models.base import Base
 from app.models.check import AssignmentCheck, CheckQuestion
 from app.models.content import (
     Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge,
-    IndexStatus, MatchFeedback, Page, PageBand, PageKind, UploadDraft, student_book,
+    IndexStatus, MatchFeedback, Page, PageBand, PageItem, PageItemConcept, PageKind, UploadDraft, student_book,
 )
 from app.models.doubt import Doubt
 from app.models.links import ParentStudentLink
@@ -47,6 +47,8 @@ __all__ = [
     "MatchFeedback",
     "Page",
     "PageBand",
+    "PageItem",
+    "PageItemConcept",
     "PageKind",
     "UploadDraft",
     "student_book",

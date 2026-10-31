@@ -21,14 +21,15 @@ from typing import Iterable, Optional, Sequence
 from neo4j import GraphDatabase
 
 from app.graph_store.base import (
-    ChapterGraph, ConceptHit, GraphStoreError, PageHit, PrerequisiteRow,
+    ChapterGraph, ConceptHit, GraphStoreError, ItemHit, PageHit, PrerequisiteRow,
 )
 
 logger = logging.getLogger(__name__)
 
 CONCEPT_INDEX = "concept_embedding_idx"
 PAGE_INDEX = "page_embedding_idx"
-LABEL_INDEXES = (("Chapter", "id"), ("Page", "id"), ("Page", "chapter_id"), ("Concept", "id"), ("Concept", "chapter_id"))
+ITEM_INDEX = "item_embedding_idx"
+LABEL_INDEXES = (("Chapter", "id"), ("Page", "id"), ("Page", "chapter_id"), ("Concept", "id"), ("Concept", "chapter_id"), ("PageItem", "id"), ("PageItem", "chapter_id"))
 _SAFE_WORD = re.compile(r"^[a-z0-9_]+$")
 
 
@@ -105,7 +106,7 @@ class MemgraphStore:
             with self.driver.session() as session:
                 for label, prop in LABEL_INDEXES:
                     self._ddl(session, f"CREATE INDEX ON :{label}({prop})")
-                for name, label in ((CONCEPT_INDEX, "Concept"), (PAGE_INDEX, "Page")):
+                for name, label in ((CONCEPT_INDEX, "Concept"), (PAGE_INDEX, "Page"), (ITEM_INDEX, "PageItem")):
                     self._ddl(
                         session,
                         f"CREATE VECTOR INDEX {name} ON :{label}(embedding) WITH CONFIG "
@@ -123,7 +124,7 @@ class MemgraphStore:
         for row in rows:
             name = row.get("index_name") or row.get("name")
             found = row.get("dimension")
-            if name in (CONCEPT_INDEX, PAGE_INDEX) and found is not None and int(found) != self.dim:
+            if name in (CONCEPT_INDEX, PAGE_INDEX, ITEM_INDEX) and found is not None and int(found) != self.dim:
                 raise GraphStoreError(
                     f"Memgraph index {name} has dimension {found} but EMBEDDING_DIM is {self.dim}. Drop the "
                     f"vector indexes (DROP VECTOR INDEX {name}) and run `python -m app.db.sync_graph --rebuild`."
@@ -138,10 +139,16 @@ class MemgraphStore:
             {"id": c.id, "name": c.name, "description": c.description, "position": c.position, "embedding": c.embedding}
             for c in graph.concepts
         ]
+        item_rows = [
+            {"id": i.id, "kind": i.kind, "label": i.label, "text": i.text, "solution_text": i.solution_text,
+             "page_id": i.page_id, "position": i.position, "embedding": i.embedding}
+            for i in graph.items
+        ]
         edge_rows = [{"concept_id": e.concept_id, "prerequisite_id": e.prerequisite_id, "source": e.source} for e in graph.edges]
         link_rows = [{"concept_id": c, "page_id": p} for c, p in graph.concept_pages]
 
         def work(tx):  # one transaction; safe to run again (it starts by deleting the chapter's old copy)
+            tx.run("MATCH (n:PageItem {chapter_id: $cid}) DETACH DELETE n", cid=cid).consume()
             tx.run("MATCH (n:Concept {chapter_id: $cid}) DETACH DELETE n", cid=cid).consume()
             tx.run("MATCH (n:Page {chapter_id: $cid}) DETACH DELETE n", cid=cid).consume()
             tx.run("MATCH (n:Chapter {id: $cid}) DETACH DELETE n", cid=cid).consume()
@@ -163,8 +170,17 @@ class MemgraphStore:
                     "description: r.description, position: r.position, embedding: r.embedding, embedding_model: $model})",
                     rows=batch, cid=cid, bid=bid, model=model,
                 ).consume()
+            for batch in _chunks(item_rows, self._batch):
+                tx.run(
+                    "UNWIND $rows AS r CREATE (:PageItem {id: r.id, chapter_id: $cid, book_id: $bid, kind: r.kind, "
+                    "label: r.label, text: r.text, solution_text: r.solution_text, page_id: r.page_id, "
+                    "position: r.position, embedding: r.embedding, embedding_model: $model})",
+                    rows=batch, cid=cid, bid=bid, model=model,
+                ).consume()
             tx.run("MATCH (ch:Chapter {id: $cid}) MATCH (p:Page {chapter_id: $cid}) CREATE (p)-[:IN_CHAPTER]->(ch)", cid=cid).consume()
             tx.run("MATCH (ch:Chapter {id: $cid}) MATCH (c:Concept {chapter_id: $cid}) CREATE (c)-[:IN_CHAPTER]->(ch)", cid=cid).consume()
+            tx.run("MATCH (ch:Chapter {id: $cid}) MATCH (i:PageItem {chapter_id: $cid}) CREATE (i)-[:IN_CHAPTER]->(ch)", cid=cid).consume()
+            tx.run("MATCH (i:PageItem {chapter_id: $cid}) MATCH (p:Page {id: i.page_id}) CREATE (i)-[:ON_PAGE]->(p)", cid=cid).consume()
             for batch in _chunks(edge_rows, self._batch):
                 tx.run(
                     "UNWIND $rows AS e MATCH (c:Concept {id: e.concept_id}), (p:Concept {id: e.prerequisite_id}) "
@@ -175,6 +191,12 @@ class MemgraphStore:
                 tx.run(
                     "UNWIND $rows AS l MATCH (c:Concept {id: l.concept_id}), (p:Page {id: l.page_id}) "
                     "CREATE (c)-[:EXPLAINED_ON]->(p)",
+                    rows=batch,
+                ).consume()
+            for batch in _chunks([{"item_id": i, "concept_id": c} for i, c in graph.item_concepts], self._batch):
+                tx.run(
+                    "UNWIND $rows AS l MATCH (i:PageItem {id: l.item_id}), (c:Concept {id: l.concept_id}) "
+                    "CREATE (i)-[:ABOUT]->(c)",
                     rows=batch,
                 ).consume()
 
@@ -203,6 +225,7 @@ class MemgraphStore:
 
     def delete_chapter(self, chapter_id: str) -> None:
         def work(tx):
+            tx.run("MATCH (n:PageItem {chapter_id: $cid}) DETACH DELETE n", cid=chapter_id).consume()
             tx.run("MATCH (n:Concept {chapter_id: $cid}) DETACH DELETE n", cid=chapter_id).consume()
             tx.run("MATCH (n:Page {chapter_id: $cid}) DETACH DELETE n", cid=chapter_id).consume()
             tx.run("MATCH (n:Chapter {id: $cid}) DETACH DELETE n", cid=chapter_id).consume()
@@ -217,7 +240,7 @@ class MemgraphStore:
 
     def clear(self) -> None:
         def work(tx):
-            for label in ("Concept", "Page", "Chapter"):
+            for label in ("PageItem", "Concept", "Page", "Chapter"):
                 tx.run(f"MATCH (n:{label}) DETACH DELETE n").consume()
 
         with self._guard("clear"):
@@ -278,6 +301,24 @@ class MemgraphStore:
         )
         return [PageHit(r["id"], r["page_number"], r["chapter_id"], r["book_id"], r["similarity"]) for r in rows]
 
+    def search_items(self, vector: Sequence[float], book_ids: Sequence[str], k: int = 5) -> list[ItemHit]:
+        rows = self._vector_search(
+            ITEM_INDEX, "PageItem", vector, book_ids, k,
+            "node.id AS id, node.kind AS kind, node.label AS label, node.text AS text, "
+            "node.solution_text AS solution_text, node.page_id AS page_id, node.chapter_id AS chapter_id, "
+            "node.book_id AS book_id, node.position AS position",
+        )
+        # Resolve page number from the page node in one small read per result batch.
+        if not rows:
+            return []
+        page_ids = [r["page_id"] for r in rows]
+        pages = {r["id"]: r["page_number"] for r in self._read(
+            "MATCH (p:Page) WHERE p.id IN $ids RETURN p.id AS id, p.page_number AS page_number", ids=page_ids
+        )}
+        return [ItemHit(r["id"], r["kind"], r["label"], r["text"], r["solution_text"],
+                         r["page_id"], int(pages.get(r["page_id"], 0)), r["chapter_id"], r["book_id"], r["similarity"])
+                for r in rows]
+
     def prerequisites(self, concept_id: str, book_ids: Sequence[str], max_depth: int = 5) -> list[PrerequisiteRow]:
         wanted = list(dict.fromkeys(str(b) for b in book_ids))
         if not wanted:
@@ -294,7 +335,7 @@ class MemgraphStore:
 
     def stats(self) -> dict:
         with self._guard("stats"):
-            out = {"Chapter": 0, "Page": 0, "Concept": 0, "REQUIRES": 0}
+            out = {"Chapter": 0, "Page": 0, "PageItem": 0, "Concept": 0, "REQUIRES": 0}
             for row in self._read("MATCH (n) WHERE n:Chapter OR n:Page OR n:Concept RETURN labels(n)[0] AS label, count(n) AS n"):
                 out[row["label"]] = row["n"]
             rows = self._read("MATCH (:Concept)-[r:REQUIRES]->(:Concept) RETURN count(r) AS n")

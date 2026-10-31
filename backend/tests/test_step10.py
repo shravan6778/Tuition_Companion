@@ -78,8 +78,12 @@ def test_embedder_failure_never_fails_the_chapter(session_factory):
 # ---- 10b/10c: recap pages and activities ------------------------------------------------------
 
 def reply(page_kind="content", **concepts):
-    items = [{"name": n, "kind": k, "description": "d"} for n, k in concepts.items()]
-    return json.dumps({"page_kind": page_kind, "concepts": items})
+    extracted = [{"name": n, "description": "d"} for n, k in concepts.items() if k == "idea"]
+    page_items = [
+        {"kind": ("exercise_question" if k == "exercise" else k), "label": n, "text": f"{n} text", "concept_names": []}
+        for n, k in concepts.items() if k != "idea"
+    ]
+    return json.dumps({"page_kind": page_kind, "concepts": extracted, "items": page_items})
 
 
 class Scripted:
@@ -93,24 +97,31 @@ class Scripted:
         return self.text
 
 
-def test_activities_and_exercises_are_filtered_by_kind():
-    out = extract_page(Scripted(reply(Osmosis="idea", Potato_demo="activity", Q3="exercise")), "Osmosis is the movement of water")
-    assert [c.name for c in out.concepts] == ["Osmosis"] and out.dropped == 2
+def test_activities_and_exercises_are_preserved_as_items():
+    out = extract_page(Scripted(reply(Osmosis="idea", Potato_demo="activity", Q3="exercise")),
+                       "Osmosis is the movement of water")
+    assert [c.name for c in out.concepts] == ["Osmosis"]
+    assert out.dropped == 0
+    assert any(i.kind == "activity" for i in out.items)
+    assert any(i.kind == "exercise_question" for i in out.items)
 
 
 def test_activity_names_are_filtered_even_if_the_model_calls_them_ideas():
     out = extract_page(Scripted(json.dumps({"concepts": [
         {"name": "Osmosis experiment with potato pieces"}, {"name": "Onion Root Tip Experiment"},
         {"name": "Educational Activities on Cell Division"}, {"name": "Mitosis"}]})), "Mitosis divides a cell in two")
-    assert [c.name for c in out.concepts] == ["Mitosis"] and out.dropped == 3
-    assert looks_like_activity("Fig. 2.19 Meiosis") and not looks_like_activity("Cell membrane")
+    assert [c.name for c in out.concepts] == [
+        "Osmosis experiment with potato pieces", "Onion Root Tip Experiment",
+        "Educational Activities on Cell Division", "Mitosis"
+    ] and out.dropped == 0
+    assert looks_like_activity("Experiment") and not looks_like_activity("Cell membrane")
 
 
 def test_recap_pages_keep_no_concepts_whether_flagged_by_the_model_or_the_heading():
     by_model = extract_page(Scripted(reply("recap", Cell="idea")), "The cell is the unit")
-    assert by_model.concepts == [] and by_model.page_kind == "recap" and by_model.dropped == 1
+    assert [c.name for c in by_model.concepts] == ["Cell"] and by_model.page_kind == "recap" and by_model.dropped == 0
     by_heading = extract_page(Scripted(reply("content", Cell="idea")), "At a Glance\n The cell is the unit of life")
-    assert by_heading.concepts == []
+    assert [c.name for c in by_heading.concepts] == ["Cell"]
     assert looks_like_recap_page("N 25 Cell\nExercises\n1. What is a cell?")
     assert not looks_like_recap_page("Cells divide. The summary of this process is long.\n" + "x " * 200)
 
@@ -229,9 +240,10 @@ def test_recap_page_with_no_concepts_is_not_flagged_as_a_bad_scan(session_factor
         assert ch.graph_report["review_pages"] == [] and ch.graph_report["recap_pages"] == 1
 
 
-def test_sidebars_are_dropped_and_near_misses_are_reported(session_factory):
+def test_sidebars_are_preserved_and_near_misses_are_reported(session_factory):
     out = extract_page(Scripted(reply(Mitosis="idea", Arun_Kumar_Sharma_and_Chromosome_Research="sidebar")), "Mitosis divides a cell")
-    assert [c.name for c in out.concepts] == ["Mitosis"] and out.dropped == 1
+    assert [c.name for c in out.concepts] == ["Mitosis"] and out.dropped == 0
+    assert any(i.kind == "sidebar" for i in out.items)
 
     near = {"Cell membrane": [1.0, 0.0], "Cell membrane structure": [0.88, 0.475]}  # cosine ~0.88: close, not merged
     with session_factory() as db:
@@ -318,3 +330,14 @@ def test_copied_chapter_keeps_a_review_flag_the_source_had(session_factory):
         flagged = db.scalar(select(Page).where(Page.chapter_id == second.id, Page.page_number == 2))
         assert flagged.needs_review and flagged.review_note == "teacher should check this scan"
         assert [p["page"] for p in second.graph_report["review_pages"]] == [2]
+
+
+def test_item_regex_backstops_propose_examples_exercises_and_figures():
+    out = extract_page(
+        Scripted('{"page_kind":"content","concepts":[{"name":"Cell","description":"d"}],"items":[]}'),
+        "Example 3 explains cells. Exercise 9.5 asks a question. Fig. 9.5 shows the graph."
+    )
+    labels = {(i.kind, i.label) for i in out.items}
+    assert ("example", "Example 3") in labels
+    assert ("exercise_question", "Exercise 9.5") in labels
+    assert ("diagram", "Fig. 9.5") in labels

@@ -10,7 +10,7 @@ from app.content_library import access
 from app.content_library.search import search_books
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.content import Book, Chapter, ChapterStatus, Concept, MatchFeedback, Page
+from app.models.content import Book, Chapter, ChapterStatus, Concept, MatchFeedback, Page, PageItem
 from app.models.assignment import Assignment
 from app.core.codes import generate_unique_code
 from app.models.room import Room, RoomJoinRequest, RoomMember, RoomType
@@ -173,11 +173,11 @@ def student_book_outlines(student_id: uuid.UUID, teacher=Depends(require_teacher
                 .where(Page.chapter_id == chapter.id, Concept.is_canonical.is_(True))
                 .order_by(Page.page_number, Concept.position)
             ).all()
-            labels = []
-            for page in db.scalars(
-                select(Page).where(Page.chapter_id == chapter.id, Page.page_kind == "exercise").order_by(Page.page_number)
-            ).all():
-                labels.extend(extract_item_labels(page.content_text))
+            labels = db.scalars(
+                select(PageItem.label).join(Page, Page.id == PageItem.page_id)
+                .where(Page.chapter_id == chapter.id, PageItem.label.is_not(None))
+                .order_by(Page.page_number, PageItem.position)
+            ).all()
             chapters_out.append({
                 "id": chapter.id,
                 "title": chapter.title,
@@ -222,9 +222,11 @@ def list_reference_books(
         for c in book.chapters:
             concepts = db.scalars(select(Concept.name).join(Page, Page.id == Concept.page_id).where(
                 Page.chapter_id == c.id, Concept.is_canonical.is_(True)).order_by(Page.page_number, Concept.position)).all()
-            labels = []
-            for p in db.scalars(select(Page).where(Page.chapter_id == c.id, Page.page_kind == "exercise")).all():
-                labels.extend(extract_item_labels(p.content_text))
+            labels = db.scalars(
+                select(PageItem.label).join(Page, Page.id == PageItem.page_id)
+                .where(Page.chapter_id == c.id, PageItem.label.is_not(None))
+                .order_by(Page.page_number, PageItem.position)
+            ).all()
             enriched.append(ChapterOut.model_validate({**c.__dict__, "concept_names": list(dict.fromkeys(concepts)), "item_labels": list(dict.fromkeys(labels))}))
         out.chapters = enriched
         result.append(out)

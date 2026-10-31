@@ -8,6 +8,11 @@ class FakeLLMProvider:
 
     model_name = "fake"
 
+    def describe_figure(self, image_bytes: bytes, *, page_number: int, label: str | None = None) -> str:
+        """Stub for tests: returns a predictable description without calling any real service."""
+        tag = f" ({label})" if label else ""
+        return f"Fake figure description for page {page_number}{tag}: axes and trend not available in test mode."
+
     def complete_json(self, system: str, user: str) -> str:
         if user.startswith("PERSONALIZATION BRIEFING"):
             return self._briefing(user)

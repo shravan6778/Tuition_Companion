@@ -16,13 +16,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import settings
 from app.core.errors import ProcessingError
-from app.doubts.retrieval import RetrievedPage
+from app.doubts.retrieval import RetrievedItem, RetrievedPage
 from app.graph_store.base import ConceptHit
 
 MAX_RETRIES = 2
 
 SYSTEM = (
-    "You are a patient tutor helping a school student with ONE doubt, using ONLY the textbook pages given. "
+    "You are a patient tutor helping a school student with ONE doubt, using ONLY the textbook pages and textbook items given. "
     "Reply with JSON only: "
     '{"answer":str,"refresher":str|null,"used_sources":[str],"cannot_answer":bool}. '
     "Rules: (1) Explain in simple words a student of this book can follow, in about 150 words at most; start with the "
@@ -64,6 +64,12 @@ def build_prompt(question: str, pages: Sequence[RetrievedPage], concepts: Sequen
     parts = ["TUTOR DOUBT", f"STUDENT DOUBT: {question}", "PAGES:"]
     for i, p in enumerate(pages):
         parts.append(f"[{_label(i)}] (chapter: {p.chapter_title}, page {p.page_number})\n{p.text[: settings.tutor_page_chars]}\n")
+    if items:
+        parts.append("TEXTBOOK ITEMS (examples, exercises, figures, activities and sidebars):")
+        for i in items[:8]:
+            label = f" {i.label}" if i.label else ""
+            solution = f"\nSolution/explanation: {i.solution_text[:settings.tutor_page_chars]}" if i.solution_text else ""
+            parts.append(f"- page {i.page_number}{label} [{i.kind}]\n{i.text[:settings.tutor_page_chars]}{solution}")
     if concepts:
         parts.append("KEY CONCEPTS:")
         parts += [f"- {c.name}: {c.description or ''}".rstrip() for c in concepts[:5]]
@@ -78,12 +84,12 @@ def _strip_fences(raw: str) -> str:
 
 
 def explain(provider, question: str, pages: Sequence[RetrievedPage], concepts: Sequence[ConceptHit] = (),
-            refresher: Sequence[tuple[str, str]] = ()) -> TutorAnswer:
+            refresher: Sequence[tuple[str, str]] = (), items: Sequence[RetrievedItem] = ()) -> TutorAnswer:
     """Raises TutorError when no valid, grounded reply comes back (after MAX_RETRIES corrections)."""
     if not pages:
         raise TutorError("Nothing to explain from.")  # the caller must not get here; never answer without pages
     labels = {_label(i): p for i, p in enumerate(pages)}
-    user = build_prompt(question, pages, concepts, refresher)
+    user = build_prompt(question, pages, concepts, refresher, items)
     problem = ""
     for attempt in range(MAX_RETRIES + 1):
         prompt = user + (f"\n\nYour previous reply was invalid: {problem}\nReturn valid JSON only, matching the schema." if attempt else "")

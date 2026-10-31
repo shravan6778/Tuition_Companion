@@ -268,6 +268,18 @@ class WholeBookConfirmIn(BaseModel):
 
 
 
+class PageItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    page_id: uuid.UUID
+    kind: str
+    label: Optional[str] = None
+    text: str
+    solution_text: Optional[str] = None
+    position: int = 0
+    concepts: list[ConceptOut] = []
+
+
 class PageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
@@ -277,6 +289,7 @@ class PageOut(BaseModel):
     needs_review: bool = False
     review_note: Optional[str] = None
     concepts: list[ConceptOut] = []
+    items: list[PageItemOut] = []
 
 
 class ChapterCreate(BaseModel):

@@ -117,9 +117,52 @@ class Page(Base):
 
     chapter = relationship("Chapter", back_populates="pages")
     concepts = relationship("Concept", back_populates="page", cascade="all, delete-orphan")
+    items = relationship("PageItem", back_populates="page", cascade="all, delete-orphan", order_by="PageItem.position")
     bands = relationship("PageBand", back_populates="page", cascade="all, delete-orphan")
     embedding = relationship("ContentEmbedding", foreign_keys="ContentEmbedding.page_id", back_populates="page",
                              uselist=False, cascade="all, delete-orphan")
+
+
+
+class PageItemConcept(Base):
+    """Many-to-many link between a mixed page item and the concepts it explains/tests."""
+    __tablename__ = "page_item_concepts"
+    item_id = Column(Uuid, ForeignKey("page_items.id", ondelete="CASCADE"), primary_key=True)
+    concept_id = Column(Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), primary_key=True)
+
+
+class PageItem(Base):
+    """A first-class example, exercise, diagram, activity or sidebar on a page."""
+    __tablename__ = "page_items"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('concept','example','exercise_question','diagram','activity','sidebar')",
+            name="ck_page_item_kind",
+        ),
+    )
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4, index=True)
+    page_id = Column(Uuid, ForeignKey("pages.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(24), nullable=False)
+    label = Column(String(120), nullable=True)
+    text = Column(Text, nullable=False)
+    solution_text = Column(Text, nullable=True)
+    position = Column(Integer, nullable=False, default=0, server_default="0")
+
+    page = relationship("Page", back_populates="items")
+    concepts = relationship(
+        "Concept",
+        secondary="page_item_concepts",
+        back_populates="page_items",
+    )
+    embedding = relationship(
+        "ContentEmbedding",
+        foreign_keys="ContentEmbedding.item_id",
+        back_populates="item",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
 
 
 class PageBand(Base):
@@ -151,6 +194,7 @@ class Concept(Base):
                              uselist=False, cascade="all, delete-orphan")
     edges_in = relationship("ConceptEdge", foreign_keys="ConceptEdge.concept_id", back_populates="concept", cascade="all, delete-orphan")
     edges_out = relationship("ConceptEdge", foreign_keys="ConceptEdge.prerequisite_id", back_populates="prerequisite", cascade="all, delete-orphan")
+    page_items = relationship("PageItem", secondary="page_item_concepts", back_populates="concepts")
 
     @property
     def prerequisite_ids(self) -> list[uuid.UUID]:
@@ -226,11 +270,14 @@ class ContentEmbedding(Base):
     __tablename__ = "content_embeddings"
     __table_args__ = (
         CheckConstraint(
-            "(page_id IS NOT NULL AND concept_id IS NULL) OR (page_id IS NULL AND concept_id IS NOT NULL)",
-            name="ck_embedding_page_xor_concept",
+            "(page_id IS NOT NULL AND concept_id IS NULL AND item_id IS NULL) OR "
+            "(page_id IS NULL AND concept_id IS NOT NULL AND item_id IS NULL) OR "
+            "(page_id IS NULL AND concept_id IS NULL AND item_id IS NOT NULL)",
+            name="ck_embedding_page_xor_concept_item",
         ),
         UniqueConstraint("page_id", name="uq_embedding_page"),
         UniqueConstraint("concept_id", name="uq_embedding_concept"),
+        UniqueConstraint("item_id", name="uq_embedding_item"),
         Index("ix_embedding_model_hash", "model", "text_sha256"),
     )
 
@@ -238,6 +285,7 @@ class ContentEmbedding(Base):
     chapter_id = Column(Uuid, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)
     page_id = Column(Uuid, ForeignKey("pages.id", ondelete="CASCADE"), nullable=True)
     concept_id = Column(Uuid, ForeignKey("concepts.id", ondelete="CASCADE"), nullable=True)
+    item_id = Column(Uuid, ForeignKey("page_items.id", ondelete="CASCADE"), nullable=True)
     model = Column(String(60), nullable=False)  # embedding model/deployment that produced the vector
     dim = Column(Integer, nullable=False)
     text_sha256 = Column(String(64), nullable=False)
@@ -246,6 +294,7 @@ class ContentEmbedding(Base):
 
     page = relationship("Page", foreign_keys=[page_id], back_populates="embedding")
     concept = relationship("Concept", foreign_keys=[concept_id], back_populates="embedding")
+    item = relationship("PageItem", foreign_keys=[item_id], back_populates="embedding")
 
 
 class UploadDraft(Base):

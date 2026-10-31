@@ -1,4 +1,4 @@
-"""Page-level concept extraction: LLM call + schema validation + correction retries (Rules.md §3)."""
+"""Page-level extraction of concepts plus mixed textbook items."""
 import re
 from dataclasses import dataclass, field
 
@@ -9,103 +9,42 @@ from app.core.errors import ProcessingError
 
 MAX_RETRIES = 2
 
+# Pages in the last SUMMARY_TAIL_FROM fraction of a chapter that look like a summary are
+# treated as recap/exercise pages (used by backfill_page_kind and the orchestrator).
+SUMMARY_TAIL_FROM = 0.6
+
 SYSTEM = (
-    "You are an educational curriculum parser. From one textbook page, extract the concepts a student must "
-    "understand. Reply with JSON only, shaped exactly as: "
-    '{"concepts":[{"name":str,"description":str,"learning_objectives":[str],"prerequisites":[str]}]}. '
-    "Use 0-10 concepts (an empty list is fine for a cover, index or blank page). Concept names must be unique "
-    "on the page. 'prerequisites' are names of earlier concepts a student needs first, only if the text "
-    "mentions or clearly implies them. Use only what the page supports; add no outside knowledge. "
-    "A concept is an IDEA a student must understand (a definition, law, process, structure, term). Hands-on "
-    "activities, experiments, figures, exercises, questions and boxed trivia are NOT concepts: if you list one, "
-    "set its \"kind\" to \"activity\" or \"exercise\"; boxed side notes (biographies, trivia, 'Threads of Curiosity', "
-    "ethics or career notes) get \"sidebar\"; otherwise use \"idea\". Name each idea in its plain, "
-    "standard textbook form (e.g. 'Cell membrane', not 'Cell Membrane Structure and Function Overview'). "
-    "Also set the top-level \"page_kind\": \"content\" for pages that teach, \"recap\" for chapter "
-    "summaries / 'At a Glance' pages, \"exercise\" for question and exercise pages, \"other\" for covers, "
-    "indexes and blanks. Full shape: "
-    '{"page_kind":str,"concepts":[{"name":str,"kind":str,"description":str,"learning_objectives":[str],"prerequisites":[str]}]}.'
+    "You are an educational textbook parser. Extract BOTH concepts and page items. Reply with JSON only. "
+    'Shape: {"page_kind":"content|recap|exercise|other","concepts":[{"name":str,"description":str,'
+    '"learning_objectives":[str],"prerequisites":[str]}],"items":[{"kind":"concept|example|exercise_question|diagram|activity|sidebar",'
+    '"label":str|null,"text":str,"solution_text":str|null,"concept_names":[str]}]}. '
+    "A page is mixed: page_kind is only its dominant type, never a reason to discard items. "
+    "Concepts are ideas a student must understand. Items preserve examples, worked examples, exercises, questions, "
+    "activities/experiments, figures/diagrams, and boxed sidebars. Do not discard non-concept material. "
+    "For examples use labels such as 'Example 3'; for exercises use 'Exercise 9.5' or 'Ex 9.5 Q4'; "
+    "for figures use 'Fig. 9.5'. Keep item text faithful and concise, and include a solution/explanation when "
+    "the page provides one. concept_names must contain only concepts extracted on this page that the item explains/tests. "
+    "Use only the page text; do not invent missing solutions. Empty arrays are valid for blank/index/cover pages."
 )
+_PAGE_KIND = ("content", "recap", "exercise", "other")
+_ITEM_KINDS = ("concept", "example", "exercise_question", "diagram", "activity", "sidebar")
 
-DROPPED_KINDS = {"activity", "exercise", "figure", "question", "sidebar"}
-NON_TEACHING_PAGES = {"recap", "exercise"}  # their concepts only repeat or test earlier ones
-_ACTIVITY_NAME = re.compile(r"\b(experiments?|activity|activities|exercises?)\b|^\s*(fig(ure)?\.?|question|let'?s)\b", re.I)
-_RECAP_HEADING = re.compile(
-    r"^\W*(at a glance|chapter summary|summary|key points|points to remember|let'?s recall|"
-    r"exercises?|review questions|questions)\b", re.I | re.M,
-)
-
-
-_SUMMARY_HEADING = re.compile(r"^\W*(at a glance|chapter summary|summary|key points|points to remember)\b", re.I | re.M)
-SUMMARY_TAIL_FROM = 0.6  # a summary heading only ends the teaching part if it sits in the last 40% of the chapter
+_EXAMPLE_RE = re.compile(r"\bExample\s+(\d+(?:\.\d+)*)\b", re.I)
+_EXERCISE_RE = re.compile(r"\bExercise\s+(\d+(?:\.\d+)*)\b", re.I)
+_FIGURE_RE = re.compile(r"\bFig(?:ure)?\.?\s*(\d+(?:\.\d+)*)\b", re.I)
+_ACTIVITY_RE = re.compile(r"^\s*(experiment|activity|activities|investigate|try this|let'?s)\b", re.I)
 
 
-def looks_like_summary_page(text: str) -> bool:
-    """A chapter-end summary ('At a Glance', 'Summary'). Everything after it is exercise material."""
-    return bool(_SUMMARY_HEADING.search((text or "")[:250]))
-
-
-_EXERCISE_HEADING = re.compile(r"^\W*(exercises?|review questions|questions)\b", re.I | re.M)
-
-
-_ITEM_LABEL = re.compile(
-    r"\b(?:exercise|ex\.?|question|q\.?|review\s+question)\s*([0-9]+(?:\.[0-9]+)*[a-z]?)\b",
-    re.I,
-)
-
-
-def extract_item_labels(text: str) -> list[str]:
-    """Return only compact exercise/question labels, never page text.
-
-    These labels are safe teacher-facing metadata such as ``Exercise 9.5``.
-    """
-    labels: list[str] = []
-    for match in _ITEM_LABEL.finditer((text or "")[:1200]):
-        prefix = match.group(0).strip()
-        # Normalize whitespace while preserving the short label only.
-        prefix = re.sub(r"\s+", " ", prefix)
-        if prefix.lower().startswith("ex"):
-            label = re.sub(r"^ex\.?", "Exercise", prefix, flags=re.I)
-        else:
-            label = prefix
-        if label not in labels:
-            labels.append(label[:80])
-    return labels
-
-
-def heading_page_kind(text: str) -> str | None:
-    """'exercise' / 'recap' when the page STARTS with such a heading (first 250 chars), else None. Deterministic,
-    so old chapters can be labelled without a model call (python -m app.db.backfill_page_kind)."""
-    head = (text or "")[:250]
-    if _EXERCISE_HEADING.search(head):
-        return "exercise"
-    if _SUMMARY_HEADING.search(head):
-        return "recap"
-    return None
-
-
-def normalize_page_kind(kind: str | None) -> str:
-    kind = (kind or "content").strip().lower()
-    return kind if kind in ("content", "recap", "exercise", "other") else "content"
-
-
-def looks_like_activity(name: str) -> bool:
-    """Deterministic backstop for the prompt rule: an experiment or exercise title is not an idea."""
-    return bool(_ACTIVITY_NAME.search(name or ""))
-
-
-def looks_like_recap_page(text: str) -> bool:
-    """A page that STARTS (first 250 chars, at a line start) with a summary / exercise heading."""
-    return bool(_RECAP_HEADING.search((text or "")[:250]))
-
-
-class ConceptExtractionError(ProcessingError):
-    pass
+class ExtractedItem(BaseModel):
+    kind: str = Field(default="concept", max_length=24)
+    label: str | None = Field(default=None, max_length=120)
+    text: str = Field(default="", max_length=6000)
+    solution_text: str | None = Field(default=None, max_length=6000)
+    concept_names: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ExtractedConcept(BaseModel):
     name: str = Field(min_length=2, max_length=120)
-    kind: str = Field(default="idea", max_length=20)
     description: str = Field(default="", max_length=600)
     learning_objectives: list[str] = Field(default_factory=list)
     prerequisites: list[str] = Field(default_factory=list)
@@ -114,30 +53,115 @@ class ExtractedConcept(BaseModel):
 class PageConcepts(BaseModel):
     page_kind: str = Field(default="content", max_length=20)
     concepts: list[ExtractedConcept] = Field(default_factory=list, max_length=25)
+    items: list[ExtractedItem] = Field(default_factory=list, max_length=40)
+
+
+class ConceptExtractionError(ProcessingError):
+    pass
+
+
+@dataclass
+class PageExtraction:
+    concepts: list[ExtractedConcept] = field(default_factory=list)
+    items: list[ExtractedItem] = field(default_factory=list)
+    dropped: int = 0  # retained for backwards-compatible pipeline counters
+    page_kind: str = "content"
 
 
 def _strip_fences(raw: str) -> str:
     return re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
 
 
-@dataclass
-class PageExtraction:
-    concepts: list[ExtractedConcept] = field(default_factory=list)
-    dropped: int = 0  # activities / exercises / recap concepts left out on purpose
-    page_kind: str = "content"
+def normalize_page_kind(kind: str | None) -> str:
+    kind = (kind or "content").strip().lower()
+    return kind if kind in _PAGE_KIND else "content"
+
+
+def heading_page_kind(text: str) -> str | None:
+    head = (text or "")[:250]
+    if re.search(r"^\W*(exercises?|review questions|questions)\b", head, re.I | re.M):
+        return "exercise"
+    if re.search(r"^\W*(at a glance|chapter summary|summary|key points|points to remember)\b", head, re.I | re.M):
+        return "recap"
+    return None
+
+
+def looks_like_summary_page(text: str) -> bool:
+    return bool(re.search(r"^\W*(at a glance|chapter summary|summary|key points|points to remember)\b",
+                          (text or "")[:250], re.I | re.M))
+
+
+def looks_like_recap_page(text: str) -> bool:
+    return bool(re.search(r"^\W*(at a glance|chapter summary|summary|key points|points to remember|"
+                          r"let'?s recall|exercises?|review questions|questions)\b",
+                          (text or "")[:250], re.I | re.M))
+
+
+def looks_like_activity(name: str) -> bool:
+    return bool(_ACTIVITY_RE.search(name or ""))
+
+
+def extract_item_labels(text: str) -> list[str]:
+    labels: list[str] = []
+    for regex, prefix in ((_EXAMPLE_RE, "Example"), (_EXERCISE_RE, "Exercise"), (_FIGURE_RE, "Fig.")):
+        for m in regex.finditer((text or "")[:4000]):
+            label = f"{prefix} {m.group(1)}"
+            if label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _regex_proposals(text: str) -> list[ExtractedItem]:
+    """Deterministic proposal backstop. These are proposals, not replacements for model extraction."""
+    out: list[ExtractedItem] = []
+    for regex, kind, prefix in (
+        (_EXAMPLE_RE, "example", "Example"),
+        (_EXERCISE_RE, "exercise_question", "Exercise"),
+        (_FIGURE_RE, "diagram", "Fig."),
+    ):
+        for m in regex.finditer(text or ""):
+            label = f"{prefix} {m.group(1)}"
+            if any((x.label or "").casefold() == label.casefold() for x in out):
+                continue
+            start = m.start()
+            snippet = (text[max(0, start): start + 1200]).strip()
+            out.append(ExtractedItem(kind=kind, label=label, text=snippet, concept_names=[]))
+    return out[:20]
+
+
+def _normalize_item(item: ExtractedItem) -> ExtractedItem:
+    kind = (item.kind or "concept").strip().lower()
+    if kind == "exercise":
+        kind = "exercise_question"
+    if kind == "figure":
+        kind = "diagram"
+    if kind == "question":
+        kind = "exercise_question"
+    if kind not in _ITEM_KINDS:
+        kind = "sidebar"
+    return item.model_copy(update={"kind": kind, "label": (item.label or "").strip() or None,
+                                   "text": (item.text or "").strip()})
+
+
+def _merge_proposals(items: list[ExtractedItem], text: str) -> list[ExtractedItem]:
+    result = [_normalize_item(x) for x in items if (x.text or "").strip()]
+    keys = {(x.kind, (x.label or "").casefold()) for x in result if x.label}
+    for proposal in _regex_proposals(text):
+        key = (proposal.kind, (proposal.label or "").casefold())
+        if key not in keys:
+            result.append(proposal)
+            keys.add(key)
+    return result[:40]
 
 
 def _filter(result: PageConcepts, page_text: str) -> PageExtraction:
-    kind = (result.page_kind or "content").strip().lower()
-    if kind in NON_TEACHING_PAGES or looks_like_recap_page(page_text):
-        # the heading is more reliable than the model about WHICH kind of non-teaching page this is
-        shown = heading_page_kind(page_text) or (kind if kind in NON_TEACHING_PAGES else "recap")
-        return PageExtraction([], len(result.concepts), shown)
-    kept = [
-        c for c in result.concepts
-        if (c.kind or "idea").strip().lower() not in DROPPED_KINDS and not looks_like_activity(c.name)
-    ]
-    return PageExtraction(kept, len(result.concepts) - len(kept), normalize_page_kind(kind))
+    kind = normalize_page_kind(result.page_kind)
+    items = _merge_proposals(result.items, page_text)
+    # Every concept is also represented as an item so pages always have a uniform item stream.
+    for c in result.concepts:
+        if not any(i.kind == "concept" and (i.label or "").casefold() == c.name.casefold() for i in items):
+            items.insert(0, ExtractedItem(kind="concept", label=c.name, text=c.description, concept_names=[c.name]))
+    return PageExtraction(result.concepts, items, 0, heading_page_kind(page_text) or kind)
 
 
 def extract_page_concepts(provider, page_text: str) -> list[ExtractedConcept]:
@@ -145,11 +169,9 @@ def extract_page_concepts(provider, page_text: str) -> list[ExtractedConcept]:
 
 
 def extract_page(provider, page_text: str) -> PageExtraction:
-    """Raises ConceptExtractionError after MAX_RETRIES failed corrections. Never returns a silent [] on failure.
-    Activities, exercises and the concepts of recap/exercise pages are filtered out (counted in `dropped`)."""
-    if not page_text.strip():
+    if not (page_text or "").strip():
         return PageExtraction()
-    user = f"PAGE TEXT:\n{page_text[: settings.concept_max_chars]}"
+    user = f"PAGE TEXT:\n{page_text[:settings.concept_max_chars]}"
     last_error = ""
     for attempt in range(MAX_RETRIES + 1):
         prompt = user
@@ -157,7 +179,8 @@ def extract_page(provider, page_text: str) -> PageExtraction:
             prompt += f"\n\nYour previous reply was invalid: {last_error}\nReturn valid JSON only, matching the schema exactly."
         raw = provider.complete_json(SYSTEM, prompt)
         try:
-            return _filter(PageConcepts.model_validate_json(_strip_fences(raw)), page_text)
+            parsed = PageConcepts.model_validate_json(_strip_fences(raw))
+            return _filter(parsed, page_text)
         except ValidationError as exc:
             last_error = "; ".join(e["msg"] for e in exc.errors())[:300]
-    raise ConceptExtractionError("Couldn't build the concept map for a page. Please retry, or re-upload a clearer file.")
+    raise ConceptExtractionError("Couldn't build the concept/item map for a page. Please retry, or re-upload a clearer file.")

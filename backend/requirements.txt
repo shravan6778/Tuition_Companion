@@ -14,3 +14,4 @@ openai
 datasketch==1.5.9
 numpy
 neo4j>=5.20  # Bolt driver for Memgraph (GRAPH_STORE_PROVIDER=memgraph)
+pymupdf  # render PDF pages for vision-based figure/graph descriptions

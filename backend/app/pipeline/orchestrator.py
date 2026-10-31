@@ -6,10 +6,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.llm import get_llm_provider
-from app.models.content import Chapter, ChapterStatus, Concept, ConceptEdge, Page
+from app.models.content import Chapter, ChapterStatus, Concept, ConceptEdge, Page, PageItem
 from app.ocr import get_ocr_provider
 from app.embeddings import get_embedding_provider
-from app.pipeline.concepts import ConceptExtractionError, SUMMARY_TAIL_FROM, extract_page, heading_page_kind, looks_like_activity, looks_like_recap_page, looks_like_summary_page
+from app.pipeline.concepts import ConceptExtractionError, SUMMARY_TAIL_FROM, ExtractedItem, extract_page, heading_page_kind, looks_like_recap_page, looks_like_summary_page
 from app.pipeline.fingerprint import apply_fingerprint, band_keys, compute_minhash, tokenize
 from app.pipeline.graph import build_chapter_graph, copy_chapter_graph
 from app.pipeline.matching import PageMatch, find_matches, summarize_book_matches
@@ -18,6 +18,55 @@ logger = logging.getLogger(__name__)
 
 REVIEW_MIN_WORDS = 40  # a page this long that yields zero concepts is suspicious
 MAX_REVIEW_REPORTED = 50
+
+
+def _render_pdf_page(pdf_bytes: bytes, page_number: int) -> bytes | None:
+    """Render one PDF page for vision; only the generated description is persisted."""
+    try:
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        page = doc.load_page(max(0, page_number - 1))
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        data = pix.tobytes("png")
+        doc.close()
+        return data
+    except Exception:
+        logger.warning("Could not render PDF page %s for figure vision", page_number, exc_info=True)
+        return None
+
+
+def _vision_items(llm, file_bytes: bytes, ext: str, page_number: int, items: list[ExtractedItem], figures: list[dict]) -> list[ExtractedItem]:
+    if ext.lower() != "pdf" or not figures or not hasattr(llm, "describe_figure"):
+        return items
+    image = _render_pdf_page(file_bytes, page_number)
+    if not image:
+        return items
+    out = list(items)
+    for fig in figures:
+        label = None
+        fid = fig.get("id")
+        for item in out:
+            if item.kind == "diagram" and not item.text:
+                label = item.label
+                break
+        try:
+            description = llm.describe_figure(image, page_number=page_number, label=label)
+        except ProcessingError:
+            raise
+        if not description:
+            continue
+        # Prefer an existing diagram proposal, otherwise create a diagram item.
+        target = next((i for i in out if i.kind == "diagram" and (fid is None or fid in (i.label or ""))), None)
+        if target is None:
+            target = ExtractedItem(kind="diagram", label=label or (f"Fig. {fid}" if fid else None), text=description)
+            out.append(target)
+        else:
+            target.text = (target.text + "\n\n" + description).strip()[:6000]
+    return out
+
 
 
 class PipelineOrchestrator:
@@ -84,7 +133,7 @@ class PipelineOrchestrator:
         pages = self.db.scalars(select(Page).where(Page.chapter_id == source.id).order_by(Page.page_number)).all()
         if not pages:
             return None
-        return {"pages": [{"page_number": p.page_number, "text": p.content_text, "lines": p.layout_data} for p in pages]}
+        return {"pages": [{"page_number": p.page_number, "text": p.content_text, "lines": p.layout_data, "figures": []} for p in pages]}
 
     def process_chapter_file(self, chapter: Chapter, file_bytes: bytes, ext: str, user_id) -> list[Page]:
         """The chapter's previous pages are replaced, so re-running (retry / re-upload) never duplicates.
@@ -107,14 +156,10 @@ class PipelineOrchestrator:
         reused_from: list[tuple[Page, Page, list[Concept]]] = []  # (new page, source page, its new concepts)
         uncovered = 0  # pages that were extracted/filtered, so the source chapter's edges cannot be copied
         short_empty_pages: list[int] = []
-        summary_seen = False  # after a chapter-end summary, pages are exercises: no concepts, no LLM calls
         total_pages = len(layout["pages"])
         for index, p_data in enumerate(layout["pages"]):
             text, number = p_data["text"], p_data["page_number"]
-            tail = summary_seen
-            if looks_like_summary_page(text) and index >= SUMMARY_TAIL_FROM * total_pages:
-                summary_seen = True
-
+            tail = False  # pages remain mixed; page_kind is only the dominant type
             matches: list[PageMatch] = []
             signature = compute_minhash(text)
             if signature:
@@ -137,12 +182,7 @@ class PipelineOrchestrator:
 
             recap = looks_like_recap_page(text) or tail
             filtered = False
-            if tail:
-                best, source_page = None, None
-                page.concepts_model = self.model_name
-                page.page_kind = "exercise"  # after the chapter-end summary everything is exercise material
-                concepts, filtered = [], True
-            elif best:
+            if best:
                 pages_reused += 1
                 logger.info("Page %s matches %s (%.2f); reusing concepts", number, best.page_id, best.score)
                 page.concepts_model = source_page.concepts_model
@@ -153,10 +193,15 @@ class PipelineOrchestrator:
                     (c.name, c.description, c.learning_objectives, c.prerequisites)
                     for c in sorted(source_page.concepts, key=lambda c: c.position)
                 ]
-                kept = [] if recap else [c for c in concepts if not looks_like_activity(c[0])]
-                filtered = len(kept) != len(concepts)
-                dropped_concepts += len(concepts) - len(kept)
-                concepts = kept
+                extracted_items = [
+                    ExtractedItem(kind=i.kind, label=i.label, text=i.text, solution_text=i.solution_text,
+                                  concept_names=[c.name for c in i.concepts])
+                    for i in sorted(source_page.items, key=lambda i: i.position)
+                ]
+                if recap and not extracted_items:
+                    extracted_items = []
+                filtered = False
+                dropped_concepts += 0
             else:
                 page.concepts_model = self.model_name
                 try:
@@ -164,18 +209,21 @@ class PipelineOrchestrator:
                 except ConceptExtractionError as exc:
                     raise ProcessingError(f"{exc} (page {number})") from exc
                 dropped_concepts += extraction.dropped
-                filtered = extraction.dropped > 0
+                filtered = False
                 recap = recap or extraction.page_kind in ("recap", "exercise")
                 page.page_kind = extraction.page_kind
                 concepts = [(c.name, c.description, c.learning_objectives, c.prerequisites) for c in extraction.concepts]
+                extracted_items = _vision_items(
+                    self.llm, file_bytes, ext, number, extraction.items, p_data.get("figures") or []
+                )
             recap_pages += 1 if recap else 0
 
             if best and source_page.needs_review:  # a reused page keeps its source's verdict, never a fresh one
                 page.needs_review, page.review_note = True, source_page.review_note
                 review_pages.append({"page": number, "note": page.review_note})
-            elif not best and not concepts and not filtered and not recap and len(tokenize(text)) >= REVIEW_MIN_WORDS:
+            elif not best and not extracted_items and not recap and not (p_data.get("figures") or []) and len(tokenize(text)) >= REVIEW_MIN_WORDS:
                 page.needs_review = True
-                page.review_note = "No concepts were found on a page with a lot of text. It may be a bad scan."
+                page.review_note = "No concepts or textbook items were found on a page with a lot of text. It may be a bad scan."
                 review_pages.append({"page": number, "note": page.review_note})
 
             new_concepts: list[Concept] = []
@@ -186,10 +234,33 @@ class PipelineOrchestrator:
                 )
                 self.db.add(concept)
                 new_concepts.append(concept)
+
+            # Persist the mixed item stream. Concept links are resolved against this page's concepts.
+            by_name = {c.name.casefold(): c for c in new_concepts}
+            for position, item in enumerate(extracted_items):
+                pi = PageItem(
+                    page_id=page.id,
+                    kind=item.kind,
+                    label=item.label,
+                    text=item.text,
+                    solution_text=item.solution_text,
+                    position=position,
+                )
+                self.db.add(pi)
+                names = list(item.concept_names)
+                if not names and item.kind in ("example", "exercise_question", "diagram", "activity"):
+                    # Regex/vision proposals are conservative; link them when a page concept is explicitly
+                    # mentioned in the item's extracted text.
+                    lower_text = (item.text or "").casefold()
+                    names = [c.name for c in new_concepts if c.name.casefold() in lower_text]
+                for raw_name in names:
+                    concept = by_name.get((raw_name or "").casefold())
+                    if concept is not None and concept not in pi.concepts:
+                        pi.concepts.append(concept)
             created.append(page)
             if best and not filtered:
                 reused_from.append((page, source_page, new_concepts))
-            elif tail or (not signature and not concepts):
+            elif tail or (not signature and not concepts and not extracted_items):
                 short_empty_pages.append(number)  # a page with no concepts by design is neutral for copying
             else:
                 uncovered += 1

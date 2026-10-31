@@ -4,7 +4,7 @@ from typing import Sequence
 
 from app.embeddings.vectors import cosine
 from app.graph_store.base import (
-    ChapterGraph, ConceptHit, GraphStoreError, PageHit, PrerequisiteRow,
+    ChapterGraph, ConceptHit, GraphStoreError, ItemHit, PageHit, PrerequisiteRow,
 )
 
 
@@ -76,6 +76,21 @@ class FakeGraphStore:
             for g in self._chapters.values() if g.book_id in allowed
             for p in g.pages if p.embedding is not None
         ]
+        return sorted(hits, key=lambda h: -h.similarity)[:k]
+
+    def search_items(self, vector: Sequence[float], book_ids: Sequence[str], k: int = 5) -> list[ItemHit]:
+        self._check()
+        allowed = set(book_ids)
+        hits = []
+        for g in self._chapters.values():
+            if g.book_id not in allowed:
+                continue
+            pages = {p.id: p for p in g.pages}
+            for item in g.items:
+                page = pages.get(item.page_id)
+                if item.embedding is not None and page is not None:
+                    hits.append(ItemHit(item.id, item.kind, item.label, item.text, item.solution_text, item.page_id,
+                                        page.page_number, g.chapter_id, g.book_id, cosine(vector, item.embedding)))
         return sorted(hits, key=lambda h: -h.similarity)[:k]
 
     def prerequisites(self, concept_id: str, book_ids: Sequence[str], max_depth: int = 5) -> list[PrerequisiteRow]:

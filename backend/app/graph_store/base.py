@@ -3,7 +3,7 @@
 Rules every store follows:
   * PostgreSQL is the source of truth. A store only holds a rebuildable COPY, written per chapter and replaced
     as a whole (`replace_chapter`), so writing the same chapter twice gives the same result.
-  * No page text goes into a store: only ids, page numbers, concept names/descriptions and vectors.
+  * Page body text is not stored as a Page node, but extracted textbook items are stored as searchable PageItem nodes.
   * Every search takes `book_ids` and returns only nodes of those books. An empty list returns nothing, never
     "everything". The caller (the Tutor, in Phase 3) passes the books the student is linked to.
 """
@@ -19,6 +19,18 @@ class GraphStoreError(Exception):
 class PageNode:
     id: str
     page_number: int
+    embedding: Optional[list[float]] = None
+
+
+@dataclass
+class ItemNode:
+    id: str
+    kind: str
+    label: Optional[str]
+    text: str
+    solution_text: Optional[str]
+    page_id: str
+    position: int
     embedding: Optional[list[float]] = None
 
 
@@ -49,11 +61,26 @@ class ChapterGraph:
     embedding_model: Optional[str]
     pages: list[PageNode] = field(default_factory=list)
     concepts: list[ConceptNode] = field(default_factory=list)  # canonical concepts only
+    items: list[ItemNode] = field(default_factory=list)
+    item_concepts: list[tuple[str, str]] = field(default_factory=list)  # (item id, concept id)
     edges: list[EdgeRow] = field(default_factory=list)
     concept_pages: list[tuple[str, str]] = field(default_factory=list)  # (concept id, page id) it is explained on
 
 
 @dataclass
+class ItemHit:
+    item_id: str
+    kind: str
+    label: Optional[str]
+    text: str
+    solution_text: Optional[str]
+    page_id: str
+    page_number: int
+    chapter_id: str
+    book_id: str
+    similarity: float
+
+
 class ConceptHit:
     concept_id: str
     name: str
@@ -100,6 +127,7 @@ class GraphStore(Protocol):
     def search_concepts(self, vector: Sequence[float], book_ids: Sequence[str], k: int = 5) -> list[ConceptHit]: ...
 
     def search_pages(self, vector: Sequence[float], book_ids: Sequence[str], k: int = 5) -> list[PageHit]: ...
+    def search_items(self, vector: Sequence[float], book_ids: Sequence[str], k: int = 5) -> list[ItemHit]: ...
 
     def prerequisites(self, concept_id: str, book_ids: Sequence[str], max_depth: int = 5) -> list[PrerequisiteRow]:
         """Everything the concept needs, nearest first (breadth of the prerequisite graph)."""

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.embeddings import EmbeddingError
-from app.graph_store.base import ConceptHit, GraphStoreError, PageHit, PrerequisiteRow
+from app.graph_store.base import ConceptHit, GraphStoreError, ItemHit, PageHit, PrerequisiteRow
 from app.models.content import Chapter, ChapterStatus, Concept, Page
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,20 @@ def scope_for_concepts(db: Session, concepts: Sequence[Concept]) -> Scope:
 
 
 @dataclass
+class RetrievedItem:
+    item_id: str
+    kind: str
+    label: str | None
+    text: str
+    solution_text: str | None
+    page_id: str
+    page_number: int
+    chapter_id: str
+    chapter_title: str
+    book_id: str
+    similarity: float
+
+
 class RetrievedPage:
     page_id: str
     page_number: int
@@ -85,6 +99,7 @@ class RetrievalResult:
     elsewhere_confidence: float = 0.0    # best similarity anywhere in the linked books (what "outside_assignment" is judged on)
     threshold: float = 0.0
     pages: list[RetrievedPage] = field(default_factory=list)
+    items: list[RetrievedItem] = field(default_factory=list)
     concepts: list[ConceptHit] = field(default_factory=list)
     prerequisites: list[PrerequisiteRow] = field(default_factory=list)  # refresher, nearest first, without the hits themselves
     elsewhere: list[ConceptHit] = field(default_factory=list)  # for outside_assignment: where the books do cover it
@@ -106,18 +121,20 @@ def retrieve(db: Session, text: str, *, embedder, store, book_ids: Sequence[uuid
         window = k * (settings.retrieval_scope_overfetch if scope else 1)
         concept_hits = store.search_concepts(vector, ids, k=window)
         page_hits = store.search_pages(vector, ids, k=window)
+        item_hits = store.search_items(vector, ids, k=window) if hasattr(store, "search_items") else []
     except (EmbeddingError, GraphStoreError):
         logger.warning("Retrieval failed", exc_info=True)
         return RetrievalResult(UNAVAILABLE, threshold=threshold)
 
-    result.elsewhere_confidence = max([h.similarity for h in concept_hits + page_hits], default=0.0)
+    result.elsewhere_confidence = max([h.similarity for h in concept_hits + page_hits + item_hits], default=0.0)
     if scope is not None:
         inside_concepts = [h for h in concept_hits if scope.has_concept(h.concept_id, h.chapter_id)]
         inside_pages = [h for h in page_hits if scope.has_page(h.page_id, h.chapter_id)]
+        inside_items = [h for h in item_hits if scope.has_page(h.page_id, h.chapter_id)]
     else:
-        inside_concepts, inside_pages = concept_hits, page_hits
-    inside_concepts, inside_pages = inside_concepts[:k], inside_pages[:k]
-    result.confidence = max([h.similarity for h in inside_concepts + inside_pages], default=0.0)
+        inside_concepts, inside_pages, inside_items = concept_hits, page_hits, item_hits
+    inside_concepts, inside_pages, inside_items = inside_concepts[:k], inside_pages[:k], inside_items[:k]
+    result.confidence = max([h.similarity for h in inside_concepts + inside_pages + inside_items], default=0.0)
 
     if result.confidence >= threshold:
         result.status = GROUNDED
@@ -127,7 +144,12 @@ def retrieve(db: Session, text: str, *, embedder, store, book_ids: Sequence[uuid
         # embedding is diluted by everything else on it). The pages the best concepts are explained on are still the
         # right evidence, so they join the page hits (read from PostgreSQL, same scope and tenancy checks).
         page_hits += _concept_page_hits(db, result.concepts[:3], scope)
-        result.pages = _load_pages(db, page_hits, set(ids))
+        result.items = _load_items(db, inside_items, set(ids))
+        item_page_hits = [
+            PageHit(i.page_id, i.page_number, i.chapter_id, i.book_id, i.similarity)
+            for i in result.items[:3]
+        ]
+        result.pages = _load_pages(db, page_hits + item_page_hits, set(ids))
         result.prerequisites = _refresher(store, result.concepts, ids)
         if not result.pages and not result.concepts:  # the store named hits PostgreSQL does not stand behind
             result.status = NOT_IN_BOOK
@@ -152,6 +174,24 @@ def _concept_page_hits(db: Session, concepts: Sequence[ConceptHit], scope: Optio
         if scope is None or scope.has_page(str(page_id), str(chapter_id)):
             hits.append(PageHit(str(page_id), number, str(chapter_id), str(book_id), sims[concept_id]))
     return hits
+
+
+def _load_items(db: Session, hits: list[ItemHit], book_ids: set[str]) -> list[RetrievedItem]:
+    if not hits:
+        return []
+    by_id = {uuid.UUID(h.item_id): h for h in hits}
+    from app.models.content import PageItem
+    rows = db.execute(
+        select(PageItem, Page, Chapter)
+        .join(Page, Page.id == PageItem.page_id).join(Chapter, Chapter.id == Page.chapter_id)
+        .where(PageItem.id.in_(list(by_id)), Chapter.status == ChapterStatus.READY)
+    ).all()
+    out = [
+        RetrievedItem(str(i.id), i.kind, i.label, i.text, i.solution_text, str(p.id), p.page_number,
+                      str(c.id), c.title or "", str(c.book_id), by_id[i.id].similarity)
+        for i, p, c in rows if str(c.book_id) in book_ids
+    ]
+    return sorted(out, key=lambda r: -r.similarity)
 
 
 def _load_pages(db: Session, hits: list[PageHit], book_ids: set[str]) -> list[RetrievedPage]:

@@ -25,8 +25,8 @@ from app.core.config import FAKE_EMBEDDING_MODEL, settings
 from app.embeddings import EmbeddingError, get_embedding_provider
 from app.embeddings.vectors import from_bytes, to_bytes
 from app.graph_store import GraphStoreError, get_graph_store
-from app.graph_store.base import ChapterGraph, ConceptNode, EdgeRow, PageNode
-from app.models.content import Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge, IndexStatus, Page
+from app.graph_store.base import ChapterGraph, ConceptNode, EdgeRow, ItemNode, PageNode
+from app.models.content import Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, CrossChapterEdge, IndexStatus, Page, PageItem, PageItemConcept
 from app.pipeline.fingerprint import tokenize
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class IndexReport:
 # ---- what gets embedded -------------------------------------------------------------------------
 @dataclass
 class _Item:
-    kind: str       # "page" | "concept"
+    kind: str       # "page" | "concept" | "item"
     id: object      # page/concept id
     text: str
 
@@ -65,6 +65,14 @@ class _Item:
 
 def concept_text(concept: Concept) -> str:
     return f"{concept.name}. {concept.description or ''}".strip()[: settings.embedding_max_chars]
+
+
+def item_text(item: PageItem) -> Optional[str]:
+    text = (item.label or "") + ". " + (item.text or "")
+    if item.solution_text:
+        text += "\nSolution: " + item.solution_text
+    text = text.strip()
+    return text[: settings.embedding_max_chars] if text else None
 
 
 def page_text(page: Page) -> Optional[str]:
@@ -93,6 +101,10 @@ def chapter_items(db: Session, chapter: Chapter) -> list[_Item]:
         text = page_text(page)
         if text:
             items.append(_Item("page", page.id, text))
+        for item in page.items:
+            text = item_text(item)
+            if text:
+                items.append(_Item("item", item.id, f"Page {page.page_number}. {text}"))
     return items
 
 
@@ -102,7 +114,13 @@ def embed_chapter(db: Session, chapter: Chapter, provider) -> IndexReport:
     report = IndexReport(chapter_id=str(chapter.id))
     existing = {}
     for row in db.scalars(select(ContentEmbedding).where(ContentEmbedding.chapter_id == chapter.id)):
-        existing[("page", row.page_id) if row.page_id else ("concept", row.concept_id)] = row
+        if row.page_id:
+            key = ("page", row.page_id)
+        elif row.concept_id:
+            key = ("concept", row.concept_id)
+        else:
+            key = ("item", row.item_id)
+        existing[key] = row
 
     wanted: set = set()
     todo: list[tuple[_Item, str, Optional[bytes]]] = []  # (item, sha, vector bytes when found in the cache)
@@ -142,8 +160,10 @@ def embed_chapter(db: Session, chapter: Chapter, provider) -> IndexReport:
             row = ContentEmbedding(chapter_id=chapter.id)
             if item.kind == "page":
                 row.page_id = item.id
-            else:
+            elif item.kind == "concept":
                 row.concept_id = item.id
+            else:
+                row.item_id = item.id
             db.add(row)
         row.model, row.dim, row.text_sha256, row.vector = provider.model_name, provider.dim, sha, vector
         row.created_at = datetime.now(timezone.utc)
@@ -170,7 +190,7 @@ def build_chapter_payload(db: Session, chapter: Chapter) -> ChapterGraph:
     vectors: dict[tuple[str, object], tuple[str, list[float]]] = {}
     for row in db.scalars(select(ContentEmbedding).where(ContentEmbedding.chapter_id == chapter.id)):
         if _usable(row):
-            key = ("page", row.page_id) if row.page_id else ("concept", row.concept_id)
+            key = ("page", row.page_id) if row.page_id else (("concept", row.concept_id) if row.concept_id else ("item", row.item_id))
             vectors[key] = (row.model, from_bytes(row.vector))
 
     pages = _chapter_pages(db, chapter)
@@ -196,6 +216,23 @@ def build_chapter_payload(db: Session, chapter: Chapter) -> ChapterGraph:
     graph.concepts = [
         ConceptNode(str(c.id), c.name, c.description or "", c.position or 0, vectors.get(("concept", c.id), (None, None))[1])
         for c in canonical
+    ]
+    graph.items = [
+        ItemNode(str(i.id), i.kind, i.label, i.text, i.solution_text, str(i.page_id), i.position,
+                 vectors.get(("item", i.id), (None, None))[1])
+        for i in db.scalars(
+            select(PageItem).join(Page, Page.id == PageItem.page_id)
+            .where(Page.chapter_id == chapter.id).order_by(Page.page_number, PageItem.position)
+        )
+    ]
+    graph.item_concepts = [
+        (str(item_id), str(concept_id))
+        for item_id, concept_id in db.execute(
+            select(PageItem.id, PageItemConcept.concept_id)
+            .join(PageItemConcept, PageItemConcept.item_id == PageItem.id)
+            .join(Page, Page.id == PageItem.page_id)
+            .where(Page.chapter_id == chapter.id)
+        ).all()
     ]
     for c in canonical:
         graph.concept_pages += [(str(c.id), page_id) for page_id in pages_by_key.get(c.name_key, [])]

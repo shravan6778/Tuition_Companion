@@ -122,7 +122,7 @@ def _explain(db: Session, text: str, result: RetrievalResult, book_ids: list[uui
     if not pages:
         return "failed", None
     try:
-        answer = tutor.explain(get_llm_provider(), text, pages, result.concepts, _refresher_material(db, result, book_ids))
+        answer = tutor.explain(get_llm_provider(), text, pages, result.concepts, _refresher_material(db, result, book_ids), result.items)
     except (ProcessingError, RuntimeError):  # model down, misconfigured, or no valid grounded reply: show the pages, never a guess
         logger.warning("Tutor could not answer", exc_info=True)
         return "failed", None

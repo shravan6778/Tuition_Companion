@@ -47,9 +47,11 @@ class AzureDocIntelProvider:
         for page in (result.pages or []):
             lines = getattr(page, "lines", []) or []
             page_text = " ".join([line.content for line in lines if getattr(line, "content", None)])
+            page_number = getattr(page, "page_number", len(pages_data) + 1)
             pages_data.append({
-                "page_number": getattr(page, "page_number", len(pages_data) + 1),
+                "page_number": page_number,
                 "text": page_text,
+                "figures": [],
                 "lines": [
                     {
                         "content": getattr(line, "content", ""),
@@ -58,6 +60,24 @@ class AzureDocIntelProvider:
                     for line in lines
                 ],
             })
+
+        # Document Intelligence exposes detected figures separately from text. Keep only geometry/ids;
+        # the actual image is rendered locally from the source PDF when a vision description is needed.
+        for fig in (getattr(result, "figures", None) or []):
+            regions = []
+            for region in (getattr(fig, "bounding_regions", None) or []):
+                regions.append({
+                    "page_number": getattr(region, "page_number", None),
+                    "polygon": getattr(region, "polygon", None),
+                })
+            if not regions:
+                continue
+            for page_data in pages_data:
+                if any(r.get("page_number") == page_data["page_number"] for r in regions):
+                    page_data["figures"].append({
+                        "id": getattr(fig, "id", None),
+                        "bounding_regions": regions,
+                    })
 
         paragraphs_data = []
         for p in (result.paragraphs or []):
