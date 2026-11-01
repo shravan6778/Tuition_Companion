@@ -109,9 +109,9 @@ a { color: var(--primary); }
 
 /* pills: always icon + label */
 .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 500; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: #f5f5f4; color: var(--muted); white-space: nowrap; }
-.pill.weak, .pill.declining, .pill.failed { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
-.pill.at_risk, .pill.processing { background: var(--risk-bg); color: var(--risk); border-color: var(--risk-border); }
-.pill.ok, .pill.improving, .pill.ready, .pill.done { background: var(--ok-bg); color: var(--success); border-color: var(--ok-border); }
+.pill.weak, .pill.declining, .pill.failed, .pill.redo { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+.pill.at_risk, .pill.processing, .pill.needs_work { background: var(--risk-bg); color: var(--risk); border-color: var(--risk-border); }
+.pill.ok, .pill.improving, .pill.ready, .pill.done, .pill.good { background: var(--ok-bg); color: var(--success); border-color: var(--ok-border); }
 .pill.info { background: var(--info-bg); color: var(--info); border-color: var(--info-border); }
 
 /* score bar */

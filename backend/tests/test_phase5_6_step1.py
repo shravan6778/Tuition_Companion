@@ -19,7 +19,8 @@ def _setup_trends_world(db):
     t_b = User(supertokens_user_id="st-t-trend-b", name="Teacher B", username="teacher_trend_b", phone="9100000002", role=Role.teacher)
     s_1 = User(supertokens_user_id="st-s-trend-1", name="Student 1", username="student_trend_1", phone="9100000003", role=Role.student, link_code="TREND001")
     s_2 = User(supertokens_user_id="st-s-trend-2", name="Student 2", username="student_trend_2", phone="9100000004", role=Role.student, link_code="TREND002")
-    db.add_all([t_a, t_b, s_1, s_2])
+    s_3 = User(supertokens_user_id="st-s-trend-3", name="Owner", username="student_trend_3", phone="9100000005", role=Role.student, link_code="TREND003")
+    db.add_all([t_a, t_b, s_1, s_2, s_3])  # s_3 owns the private book and sits in nobody's room
     db.flush()
 
     room_a = Room(teacher_id=t_a.id, name="Class 9 Maths", room_type=RoomType.single_class, join_code="TRENDA")
@@ -31,7 +32,7 @@ def _setup_trends_world(db):
     db.add(RoomMember(room_id=room_b.id, user_id=s_2.id))
 
     book = Book(board="CBSE", class_name="Class 9", subject="Mathematics", publisher="NCERT", is_reference=True)
-    private_b = Book(board="CBSE", class_name="Class 9", subject="Secret", publisher="Private", is_reference=False, owner_teacher_id=t_b.id)
+    private_b = Book(board="CBSE", class_name="Class 9", subject="Secret", publisher="Private", is_reference=False, owner_student_id=s_3.id)
     db.add_all([book, private_b])
     db.flush()
 

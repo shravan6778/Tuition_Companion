@@ -7,11 +7,12 @@ def _seed_practice_world(db):
     t1 = User(supertokens_user_id="st-t1-p4s3", name="Teacher 1", username="t1p4s3", phone="9300000001", role=Role.teacher)
     s1 = User(supertokens_user_id="st-s1-p4s3", name="Student 1", username="s1p4s3", phone="9300000002", role=Role.student, link_code="P4S3CD01")
     s2 = User(supertokens_user_id="st-s2-p4s3", name="Student 2", username="s2p4s3", phone="9300000003", role=Role.student, link_code="P4S3CD02")
-    db.add_all([t1, s1, s2])
+    owner = User(supertokens_user_id="st-own-p4s3", name="Owner", username="ownp4s3", phone="9300000004", role=Role.student, link_code="P4S3CD03")
+    db.add_all([t1, s1, s2, owner])
     db.flush()
 
     book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="NCERT", is_reference=True)
-    priv_book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Private", is_reference=False, owner_teacher_id=t1.id)
+    priv_book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Private", is_reference=False, owner_student_id=owner.id)
     db.add_all([book, priv_book])
     db.flush()
 
@@ -28,7 +29,7 @@ def _seed_practice_world(db):
             content_text=f"Page {i} explains concept {i} in Work and Energy with clear physical definitions and formulas.",
         )
         pages.append(p)
-    priv_p = Page(chapter_id=priv_ch.id, page_number=1, content_text="Private teacher page about hidden energy concepts.")
+    priv_p = Page(chapter_id=priv_ch.id, page_number=1, content_text="A private student page about hidden energy concepts.")
     db.add_all(pages + [priv_p])
     db.flush()
 

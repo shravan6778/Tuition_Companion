@@ -111,11 +111,11 @@ def check_data(ctx: Ctx) -> list[Result]:
 
 def setup_world(ctx: Ctx) -> list[Result]:
     db, a = ctx.db, ctx.book_a
-    for key, role in (("tA", Role.teacher), ("tB", Role.teacher), ("S1", Role.student), ("S2", Role.student), ("S3", Role.student)):
+    for key, role in (("tA", Role.teacher), ("tB", Role.teacher), ("S4", Role.student), ("S1", Role.student), ("S2", Role.student), ("S3", Role.student)):
         u = make_user(db, role, key)
         ctx.users[key], ctx.headers[key] = u, {"Authorization": f"Bearer {u.supertokens_user_id}"}
 
-    pb = Book(board="X", class_name="9", subject=a.subject, publisher="phase4 check", is_reference=False, owner_teacher_id=ctx.users["tB"].id)
+    pb = Book(board="X", class_name="9", subject=a.subject, publisher="phase4 check", is_reference=False, owner_student_id=ctx.users["S4"].id)
     db.add(pb)
     db.flush()
     ch = Chapter(book_id=pb.id, title="Private zebra chapter", sequence_num=1, status=ChapterStatus.READY)
@@ -563,7 +563,10 @@ def run(engine, opts) -> tuple[list[str], int]:
                 results = fn(ctx)
             except Exception as exc:
                 db.rollback()
-                results = [("FAIL", "?", f"check crashed: {type(exc).__name__}: {str(exc)[:250]}")]
+                tb = exc.__traceback__
+                while tb.tb_next:
+                    tb = tb.tb_next
+                results = [("FAIL", "?", f"check crashed: {type(exc).__name__}: {str(exc)[:250]} (at line {tb.tb_lineno} of {tb.tb_frame.f_code.co_filename.rsplit('/', 1)[-1]})")]
         for st, tag, msg in results:
             counts[st] += 1
             lines.append(f"{st:<6} {tag:<4} {msg}")

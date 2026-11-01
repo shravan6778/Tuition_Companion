@@ -89,10 +89,15 @@ const PILLS = {
   failed: ["!", "Failed"],
   open: ["○", "To do"],
   submitted: ["✓", "Done"],
+  // homework (manual) tasks: where the hand-in stands, then the teacher's verdict
+  sent: ["…", "Sent"],
+  good: ["✓", "Good"],
+  needs_work: ["!", "Needs work"],
+  redo: ["↺", "Redo"],
 };
 export function Pill({ kind, children }) {
   const [icon, label] = PILLS[kind] || ["", kind];
-  const cls = kind === "submitted" ? "done" : kind === "open" ? "info" : kind;
+  const cls = kind === "submitted" ? "done" : kind === "open" || kind === "sent" ? "info" : kind;
   return (
     <span className={`pill ${cls}`}>
       {icon && <span aria-hidden="true">{icon}</span>}

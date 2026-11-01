@@ -264,7 +264,8 @@ def test_prerequisite_named_without_the_parenthetical_resolves(session_factory):
         assert report["unresolved_prerequisites"] == [] and report["edges"] == 1
 
 
-def test_pages_after_the_chapter_summary_are_exercises(session_factory):
+def test_only_the_summary_page_is_recap_and_the_page_after_it_is_judged_by_its_own_content(session_factory):
+    """Pages are mixed now (examples and exercises are kept as items), so "everything after the summary is recap" is gone."""
     llm = ChapterLLM()
     summary = "At a Glance\n" + " ".join(["The cell is the basic unit of life and it divides."] * 6)
     pages = [SENTENCES[0], SENTENCES[1], SENTENCES[2], "rivers carry sediment to the sea " * 8, summary, *[SENTENCES[0] + f" Exercise {i}." for i in range(1)]]
@@ -276,9 +277,9 @@ def test_pages_after_the_chapter_summary_are_exercises(session_factory):
         calls_before = llm.page_calls
         run(db, ch, llm, pages=pages)
         names = {c.name for c in db.scalars(select(Concept).join(Page).where(Page.chapter_id == ch.id))}
-        assert names == {"Concept 1", "Concept 2", "Concept 3", "Rivers"}  # nothing from the summary or the page after it
-        assert ch.graph_report["recap_pages"] == 2 and ch.graph_report["review_pages"] == []
-        assert llm.page_calls - calls_before == 5  # pages 1-5; the page after the summary cost no LLM call
+        assert names == {"Concept 1", "Concept 2", "Concept 3", "Rivers"}  # nothing from the summary; the last page repeats page 1
+        assert ch.graph_report["recap_pages"] == 1 and ch.graph_report["review_pages"] == []  # only the "At a Glance" page
+        assert llm.page_calls - calls_before == 6  # every page is read now, including the one after the summary (it is no longer skipped as "tail")
 
 
 def test_a_summary_heading_early_in_the_chapter_does_not_end_it(session_factory):

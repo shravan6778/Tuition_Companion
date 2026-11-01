@@ -226,7 +226,7 @@ def test_drop_chapter_dry_run_refusals_and_real_delete(session_factory, monkeypa
     monkeypatch.setattr(drop_chapter, "get_graph_store", lambda: store)
     with session_factory() as db:
         book = official_book(db)
-        teacher_book = Book(board="X", class_name="9", subject="S", publisher="P", is_reference=False, owner_teacher_id=pc._throwaway_teacher(db).id)
+        teacher_book = Book(board="X", class_name="9", subject="S", publisher="P", is_reference=False, owner_student_id=pc._throwaway_student(db).id)
         db.add(teacher_book)
         db.flush()
         db.add(Chapter(book_id=teacher_book.id, title="Mine", sequence_num=1, status=ChapterStatus.READY))

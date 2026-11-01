@@ -92,7 +92,7 @@ def test_a_big_assignment_is_capped_and_the_concepts_the_student_asked_about_com
         extra = [str(c.id) for c in db.scalars(select(Concept).where(Concept.name.like("Extra %")).order_by(Concept.position))]
         db.add(MasteryEvent(student_id=world["student"].id, concept_id=uuid.UUID(extra[2]), concept_name="Extra 2", kind="doubt"))
         db.commit()
-    a = assign(client, world, level="concept", chapter=None, concept_ids=extra)
+    a = assign(client, world, level="concept", chapter="ch2", concept_ids=extra)  # the extras sit on the Force page, chapter 2
     body = complete(client, world, a).json()
     names = [q["concept_name"] for q in body["questions"]]
     assert len(names) == settings.check_max_questions == 10 and "Extra 2" in names  # the doubted concept made the cut (an even spread alone would skip it)
@@ -115,7 +115,7 @@ def test_an_invalid_reply_is_corrected_twice_then_the_question_is_failed_not_bla
     assert all(q["status"] == "ready" for q in body["questions"]) and len(model.prompts) == 4  # 3 tries for the first, 1 for the second
     bad = CheckLLM(bad={"Tissue"})
     monkeypatch.setattr("app.assessment.service.get_llm_provider", lambda: bad)
-    a = assign(client, world, level="concept", chapter=None, concept_ids=[world["concepts"]["Tissue"], world["concepts"]["Cell"], world["concepts"]["Force"]])
+    a = assign(client, world, level="subject", chapter=None)  # Cell, Tissue and Force: the three concepts of the book
     body = complete(client, world, a).json()
     failed = next(q for q in body["questions"] if q["concept_name"] == "Tissue")
     assert failed["status"] == "failed" and failed["question"] is None and failed["options"] is None and "couldn't" in failed["message"]
@@ -125,7 +125,7 @@ def test_an_invalid_reply_is_corrected_twice_then_the_question_is_failed_not_bla
 def test_a_check_with_a_failed_question_can_be_submitted_when_the_floor_is_still_met_and_the_failed_one_is_not_graded(client, session_factory, world, monkeypatch):
     bad = CheckLLM(bad={"Tissue"})
     monkeypatch.setattr("app.assessment.service.get_llm_provider", lambda: bad)
-    a = assign(client, world, level="concept", chapter=None, concept_ids=[world["concepts"]["Tissue"], world["concepts"]["Cell"], world["concepts"]["Force"]])
+    a = assign(client, world, level="subject", chapter=None)  # Cell, Tissue and Force: the three concepts of the book
     check = complete(client, world, a).json()
     assert check["can_submit"] is True
     ready = [q for q in check["questions"] if q["status"] == "ready"]

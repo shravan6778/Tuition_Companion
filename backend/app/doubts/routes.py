@@ -181,6 +181,7 @@ def _out(outcome: service.DoubtOutcome, book_id: uuid.UUID | None) -> DoubtOut:
 def ask(body: DoubtIn, student=Depends(require_student), db: Session = Depends(get_db)):
     # The assignment is checked first (404 when it isn't this student's), so a probe can't use the rate limit to learn anything.
     assignment = assignments.get_student_assignment(db, student, body.assignment_id) if body.assignment_id else None
+    assignments.require_book_task(assignment)
     chapter = None
     if body.chapter_id is not None:
         chapter = service.get_ready_chapter(db, student, body.chapter_id)
@@ -261,6 +262,7 @@ def ask_by_photo(file: UploadFile = File(...), assignment_id: uuid.UUID | None =
     if assignment_id is not None and chapter_id is not None:
         raise HTTPException(422, "Send an assignment or a chapter, not both")
     assignment = assignments.get_student_assignment(db, student, assignment_id) if assignment_id else None
+    assignments.require_book_task(assignment)  # before the photo is read or any OCR call is paid for
     chapter = service.get_ready_chapter(db, student, chapter_id) if chapter_id else None
     if chapter_id and chapter is None:
         raise HTTPException(404, "Chapter not found")

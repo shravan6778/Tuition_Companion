@@ -35,6 +35,7 @@ from app.db.phase2_check import check_migrations
 from app.doubts.retrieval import GROUNDED, NOT_IN_BOOK, OUTSIDE, UNAVAILABLE, Scope, retrieve
 from app.embeddings import EmbeddingError
 from app.graph_store.base import GraphStoreError
+from app.pipeline.concepts import extract_item_labels
 from app.models import (
     Assignment, AssignmentCheck, Book, Chapter, ChapterStatus, Concept, ConceptEdge, CrossChapterEdge, Doubt, MasteryEvent, Page, Role,
     User,
@@ -117,6 +118,7 @@ class Ctx:
         self.assignments: dict[str, dict] = {}
         self.refused_off_topic: str | None = None
         self.last_doubt = self.last_check = None
+        self.copy_chapter_ids: list[uuid.UUID] = []  # chapters indexed into the graph store for a student's own copy (removed at the end)
 
     def call(self, who: str, method: str, path: str, **kw):
         headers = self.headers.get(who, {}) if who else {}
@@ -227,13 +229,52 @@ def make_user(db: Session, role: Role, tag: str) -> User:
     return u
 
 
+def give_student_a_copy(ctx: Ctx, key: str) -> Book:
+    """A teacher's task points at a subject and chapter, and each student works from their OWN book. So the student gets a
+    private copy of the usable chapters of book A (same subject and chapter titles, same pages and concepts), indexed like a
+    real upload. It is rolled back with the rest of the world; the graph-store copies are removed in `cleanup_copies`."""
+    from app.pipeline.indexing import build_chapter_payload, embed_chapter
+
+    db, a = ctx.db, ctx.book_a
+    book = Book(board=a.board, class_name=a.class_name, subject=a.subject, publisher="own copy (check)", is_reference=False,
+                owner_student_id=ctx.users[key].id)
+    db.add(book)
+    db.flush()
+    for source in ctx.chapters_a:
+        chapter = Chapter(book_id=book.id, title=source.title, sequence_num=source.sequence_num, status=ChapterStatus.READY)
+        db.add(chapter)
+        db.flush()
+        for page in db.scalars(select(Page).where(Page.chapter_id == source.id).order_by(Page.page_number)):
+            copy = Page(chapter_id=chapter.id, page_number=page.page_number, content_text=page.content_text, page_kind=page.page_kind)
+            db.add(copy)
+            db.flush()
+            for concept in db.scalars(select(Concept).where(Concept.page_id == page.id).order_by(Concept.position)):
+                db.add(Concept(page_id=copy.id, name=concept.name, description=concept.description, name_key=concept.name_key,
+                               position=concept.position, is_canonical=concept.is_canonical))
+        db.flush()
+        embed_chapter(db, chapter, ctx.embedder)
+        db.flush()
+        ctx.store.replace_chapter(build_chapter_payload(db, chapter))
+        ctx.copy_chapter_ids.append(chapter.id)
+    db.commit()
+    return book
+
+
+def cleanup_copies(ctx: Ctx) -> None:
+    for chapter_id in ctx.copy_chapter_ids:
+        try:
+            ctx.store.delete_chapter(str(chapter_id))
+        except Exception:  # best effort: the rows themselves are rolled back anyway
+            pass
+
+
 def setup_world(ctx: Ctx) -> list[Result]:
     db, a = ctx.db, ctx.book_a
-    for key, role in (("tA", Role.teacher), ("tB", Role.teacher), ("S1", Role.student), ("S2", Role.student), ("S3", Role.student)):
+    for key, role in (("tA", Role.teacher), ("tB", Role.teacher), ("S4", Role.student), ("S1", Role.student), ("S2", Role.student), ("S3", Role.student)):
         u = make_user(db, role, key)
         ctx.users[key], ctx.headers[key] = u, {"Authorization": f"Bearer {u.supertokens_user_id}"}
-    # a private book of teacher B (no vectors, so it can only ever show up through a tenancy hole)
-    pb = Book(board="X", class_name="9", subject=a.subject, publisher="phase3 check", is_reference=False, owner_teacher_id=ctx.users["tB"].id)
+    # a private book of student S4 (nobody's room) (no vectors, so it can only ever show up through a tenancy hole)
+    pb = Book(board="X", class_name="9", subject=a.subject, publisher="phase3 check", is_reference=False, owner_student_id=ctx.users["S4"].id)
     db.add(pb)
     db.flush()
     ch = Chapter(book_id=pb.id, title="Private zebra chapter", sequence_num=1, status=ChapterStatus.READY)
@@ -279,6 +320,7 @@ def setup_world(ctx: Ctx) -> list[Result]:
     out.append(ok(good, "W2",
                   "S1 and S3 requested and were approved for teacher A's room, S2 for teacher B's; only S1 linked book A",
                   f"joining/approval/linking failed: joins {joins}, approvals {approvals}, link {link}"))
+    give_student_a_copy(ctx, "S1")  # S1 owns a copy of book A's chapters; S3 owns nothing
     return out
 
 
@@ -290,6 +332,8 @@ def _assign(ctx: Ctx, **body):
 
 def check_assignments(ctx: Ctx) -> list[Result]:
     db, a, out = ctx.db, ctx.book_a, []
+    # an assignment stores concept NAMES (it points at subject + chapter, never at one book's ids)
+    names = lambda ids: [db.get(Concept, uuid.UUID(str(i))).name for i in ids]
     ch1 = ctx.chapters_a[0]
     ids1 = ctx.concept_ids(ch1)
     room = ctx.room_a["id"]
@@ -298,24 +342,24 @@ def check_assignments(ctx: Ctx) -> list[Result]:
     r = _assign(ctx, level="chapter", book_id=str(a.id), chapter_id=str(ch1.id), room_id=room, due_date=later)
     body = r.json() if r.status_code == 201 else {}
     ctx.assignments["chapter"] = body
-    out.append(ok(r.status_code == 201 and [c["id"] for c in body["concepts"]] == [str(i) for i in ids1], "A1",
+    out.append(ok(r.status_code == 201 and [c["name"] for c in body["concepts"]] == names(ids1), "A1",
                   f"chapter level '{ch1.title}': stored list = the chapter's {len(ids1)} canonical concepts, in book order",
                   f"chapter level: {r.status_code} {r.text[:200]}"))
 
     r = _assign(ctx, level="subject", book_id=str(a.id), room_id=room)
     body = r.json() if r.status_code == 201 else {}
     ctx.assignments["subject"] = body
-    expected = {str(c.id) for c in subject_concepts(db, [a.id], a.subject or "")}
-    out.append(ok(r.status_code == 201 and {c["id"] for c in body["concepts"]} == expected and expected, "A2",
+    expected = {c.name for c in subject_concepts(db, [a.id], a.subject or "")}
+    out.append(ok(r.status_code == 201 and {c["name"] for c in body["concepts"]} == expected and expected, "A2",
                   f"subject level: stored list = every canonical concept of the ready chapters ({len(expected)})",
                   f"subject level: {r.status_code}, got {len(body.get('concepts', []))} concepts, expected {len(expected)}"))
 
     picks = [ids1[-1], ids1[0], ids1[-1]] if len(ids1) > 1 else [ids1[0]]
-    r = _assign(ctx, level="concept", book_id=str(a.id), concept_ids=[str(p) for p in picks], room_id=room, due_date=soon)
+    r = _assign(ctx, level="concept", book_id=str(a.id), chapter_id=str(ch1.id), concept_ids=[str(p) for p in picks], room_id=room, due_date=soon)
     body = r.json() if r.status_code == 201 else {}
     ctx.assignments["concept"] = body
-    want = [str(p) for p in dict.fromkeys(picks)]
-    out.append(ok(r.status_code == 201 and [c["id"] for c in body["concepts"]] == want, "A3",
+    want = names(dict.fromkeys(picks))
+    out.append(ok(r.status_code == 201 and [c["name"] for c in body["concepts"]] == want, "A3",
                   "concept level: the picked concepts, in the picked order, a duplicate dropped", f"concept level: {r.status_code} {r.text[:200]}"))
 
     # exercise level: the proposal writes nothing, the teacher's confirmed list is what is stored
@@ -330,20 +374,24 @@ def check_assignments(ctx: Ctx) -> list[Result]:
         out.append(ok(p.status_code == 200 and prop.get("status") == "ok" and prop["proposed"] and before == after, "A4",
                       f"exercise proposal for '{ex.title}': {len(prop.get('proposed', []))} concept(s) proposed from pages {prop.get('exercise_pages')}, nothing written",
                       f"exercise proposal: {p.status_code} {p.text[:200]} (assignments before {before}, after {after})"))
-        if prop.get("proposed"):
+        labels = [label for pg in db.scalars(select(Page).where(Page.chapter_id == ex.id, Page.page_kind == "exercise"))
+                  for label in extract_item_labels(pg.content_text)]
+        if prop.get("proposed") and labels:
             confirmed = [x["concept_id"] for x in prop["proposed"]][:-1] or [prop["proposed"][0]["concept_id"]]  # the teacher dropped the last one
-            r = _assign(ctx, level="exercise", book_id=str(a.id), chapter_id=str(ex.id), concept_ids=confirmed, page_numbers=prop["exercise_pages"], room_id=room)
+            r = _assign(ctx, level="exercise", book_id=str(a.id), chapter_id=str(ex.id), concept_ids=confirmed, item_label=labels[0], room_id=room)
             body = r.json() if r.status_code == 201 else {}
             ctx.assignments["exercise"] = body
-            out.append(ok(r.status_code == 201 and [c["id"] for c in body["concepts"]] == confirmed and body["exercise_pages"] == prop["exercise_pages"], "A5",
-                          f"exercise level: stored the {len(confirmed)} concept(s) the teacher CONFIRMED (one proposed concept was dropped) and the pages",
+            out.append(ok(r.status_code == 201 and [c["name"] for c in body["concepts"]] == names(confirmed) and body["item_label"] == labels[0], "A5",
+                          f"exercise level: stored the {len(confirmed)} concept(s) the teacher CONFIRMED (one proposed concept was dropped) and the label '{labels[0]}'",
                           f"exercise level: {r.status_code} {r.text[:200]}"))
             out.append(("REVIEW", "A6", f"exercise proposal to judge ('{ex.title}', pages {prop['exercise_pages']}): "
                                         + "; ".join(f"{x['name']} ({x['similarity']}, p{x['pages']})" for x in prop["proposed"])))
+        elif prop.get("proposed"):
+            out.append(("REVIEW", "A5", f"no 'Exercise n.n' label was found on the exercise pages of '{ex.title}', so the exercise level was not tried"))
 
     # a concept of ANOTHER book (or another teacher's private book) is refused, never silently dropped
     foreign = (chapter_concepts(db, ctx.chapters_b[0].id)[0] if ctx.book_b else ctx.private["concept"])
-    r = _assign(ctx, level="concept", book_id=str(a.id), concept_ids=[str(foreign.id)], room_id=room)
+    r = _assign(ctx, level="concept", book_id=str(a.id), chapter_id=str(ch1.id), concept_ids=[str(foreign.id)], room_id=room)
     out.append(ok(r.status_code == 404, "A7", "a concept that belongs to another book is a 404, not silently dropped", f"foreign concept: got {r.status_code}, expected 404"))
     both = _assign(ctx, level="chapter", book_id=str(a.id), chapter_id=str(ch1.id), room_id=room, student_id=str(ctx.users["S1"].id))
     neither = _assign(ctx, level="chapter", book_id=str(a.id), chapter_id=str(ch1.id))
@@ -360,11 +408,15 @@ def check_assignments(ctx: Ctx) -> list[Result]:
     out.append(ok(set(got) == set(made) and got == order, "A9",
                   f"S1's Today's Work shows all {len(made)} assignments (room and personal), soonest due date first",
                   f"S1 sees {len(got)} of {len(made)} assignments, order correct: {got == order}"))
-    s3 = [x["id"] for x in ctx.call("S3", "GET", "/student/assignments").json() if x["id"] in made]
+    s3 = [x for x in ctx.call("S3", "GET", "/student/assignments").json() if x["id"] in made]
     s2 = [x["id"] for x in ctx.call("S2", "GET", "/student/assignments").json() if x["id"] in made]
-    out.append(ok(not s3 and not s2, "A10",
-                  "S3 (same room, book not linked) and S2 (another teacher's room) see none of them",
-                  f"S3 sees {len(s3)} and S2 sees {len(s2)} of S1's assignments"))
+    # S3 is in the room but owns no copy: the room's tasks are listed as "upload this chapter" and carry nothing of S1's book;
+    # the task given to S1 alone is never listed for S3. S2 is in another teacher's room and sees none of them.
+    room_ids = {made[k]["id"] for k in made if made[k].get("room_id")}
+    seen3 = {x["id"] for x in s3}
+    out.append(ok(seen3 <= room_ids and all(not x.get("resolved_book_id") for x in s3) and not s2, "A10",
+                  "S3 (same room, owns no copy) sees the room's tasks only as 'upload this chapter', never S1's personal task; S2 (another teacher's room) sees none",
+                  f"S3 sees {sorted(seen3 - room_ids)} beyond the room's tasks or an available one; S2 sees {len(s2)}"))
     return out
 
 
@@ -544,9 +596,9 @@ def check_doubts(ctx: Ctx) -> list[Result]:
     foreign_ch = ask("S1", text=_doubt_text(c1), chapter_id=str(ctx.private["chapter"].id))
     foreign_as = ask("S3", text=_doubt_text(c1), assignment_id=chapter_a["id"])
     saved = db.scalar(select(func.count()).select_from(Doubt).where(Doubt.student_id.in_([s3.id])))
-    out.append(ok(both.status_code == 422 and foreign_ch.status_code == 404 and foreign_as.status_code == 404 and saved == 0, "T9",
-                  "chapter + assignment together is 422; another teacher's chapter is 404; S3 (book not linked) using S1's assignment is 404 and saves nothing",
-                  f"guards gave {both.status_code} / {foreign_ch.status_code} / {foreign_as.status_code} (expected 422 / 404 / 404), S3 doubts saved: {saved}"))
+    out.append(ok(both.status_code == 422 and foreign_ch.status_code == 404 and foreign_as.status_code == 409 and saved == 0, "T9",
+                  "chapter + assignment together is 422; another teacher's chapter is 404; S3 (owns no copy) using the room's assignment is 409 'upload this chapter' and saves nothing",
+                  f"guards gave {both.status_code} / {foreign_ch.status_code} / {foreign_as.status_code} (expected 422 / 404 / 409), S3 doubts saved: {saved}"))
 
     # T10: the photo route refuses a bad file BEFORE any OCR call
     pdf = ctx.call("S1", "POST", "/student/doubts/photo", files={"file": ("p.pdf", b"%PDF-1.4 fake", "application/pdf")})
@@ -570,14 +622,16 @@ def check_doubts(ctx: Ctx) -> list[Result]:
                   "deleting an assignment keeps the student's doubt (its assignment becomes none)", f"delete gave {deleted.status_code}, doubt kept: {kept is not None}"))
     ctx.assignments.pop("solo", None)
 
-    # B1: browse lists exactly the linked book's ready chapters
+    # B1: browse lists exactly the books S1 can search (linked book A and its own copy) and their ready chapters
     r = ctx.call("S1", "GET", "/student/doubts/browse")
     books = {bk["id"]: bk for s in r.json() for bk in s["books"]} if r.status_code == 200 else {}
-    ready = {str(c.id) for c in db.scalars(select(Chapter).where(Chapter.book_id == ctx.book_a.id, Chapter.status == ChapterStatus.READY))}
+    own = db.scalar(select(Book).where(Book.owner_student_id == ctx.users["S1"].id, Book.subject == ctx.book_a.subject))
+    mine = {ctx.book_a.id, own.id} if own is not None else {ctx.book_a.id}
+    ready = {str(c.id) for c in db.scalars(select(Chapter).where(Chapter.book_id.in_(mine), Chapter.status == ChapterStatus.READY))}
     listed = {c["id"] for bk in books.values() for c in bk["chapters"]}
     s2_browse = ctx.call("S2", "GET", "/student/doubts/browse").json()
-    out.append(ok(set(books) == {str(ctx.book_a.id)} and listed == ready and s2_browse == [], "B1",
-                  f"browse shows only the linked book A with its {len(ready)} ready chapter(s); S2 sees nothing, nobody sees the private book",
+    out.append(ok(set(books) == {str(i) for i in mine} and listed == ready and s2_browse == [], "B1",
+                  f"browse shows only book A and S1's own copy with their {len(ready)} ready chapter(s); S2 sees nothing, nobody sees the private book",
                   f"browse listed books {sorted(books)}, chapters match: {listed == ready}, S2 browse: {s2_browse}"))
     return out
 
@@ -602,7 +656,8 @@ def _has_path(db: Session, dependent: uuid.UUID, source: uuid.UUID, depth: int) 
 
 def _take(ctx: Ctx, concept: Concept, right: bool, tag: str):
     """Assign one concept and mark it complete. -> (assignment json | None, the response, None). `right` is unused: the caller submits."""
-    r = _assign(ctx, level="concept", book_id=str(ctx.book_a.id), concept_ids=[str(concept.id)], room_id=ctx.room_a["id"], title=f"phase3 check {tag}")
+    chapter_id = ctx.db.scalar(select(Page.chapter_id).where(Page.id == concept.page_id))
+    r = _assign(ctx, level="concept", book_id=str(ctx.book_a.id), chapter_id=str(chapter_id), concept_ids=[str(concept.id)], room_id=ctx.room_a["id"], title=f"phase3 check {tag}")
     if r.status_code != 201:
         return None, r, None
     limiter.reset()
@@ -794,8 +849,12 @@ def check_tenancy(ctx: Ctx) -> list[Result]:
     pb, pch, pc = ctx.private["book"], ctx.private["chapter"], ctx.private["concept"]
     chapter_assignment = ctx.assignments["chapter"]
 
-    codes = [ctx.call(who, "GET", f"/student/assignments/{chapter_assignment['id']}").status_code for who in ("S2", "S3")]
-    out.append(ok(codes == [404, 404], "L1", "S2 (another teacher's room) and S3 (book not linked) get 404 on S1's assignment", f"got {codes}"))
+    s2_get = ctx.call("S2", "GET", f"/student/assignments/{chapter_assignment['id']}")
+    s3_get = ctx.call("S3", "GET", f"/student/assignments/{chapter_assignment['id']}")
+    s3_body = s3_get.json() if s3_get.status_code == 200 else {}
+    out.append(ok(s2_get.status_code == 404 and s3_get.status_code == 200 and s3_body.get("available") is False and not s3_body.get("resolved_book_id"), "L1",
+                  "S2 (another teacher's room) gets 404 on the room's assignment; S3 (same room, owns no copy) sees it as 'upload this chapter' with no book behind it",
+                  f"got S2 {s2_get.status_code}, S3 {s3_get.status_code} {s3_body.get('available')} {s3_body.get('resolved_book_id')}"))
 
     codes = [ctx.call("tB", "GET", f"/teacher/assignments/{chapter_assignment['id']}").status_code,
              ctx.call("tB", "DELETE", f"/teacher/assignments/{chapter_assignment['id']}").status_code]
@@ -829,16 +888,17 @@ def check_tenancy(ctx: Ctx) -> list[Result]:
     out.append(ok([teacher_route, student_route, doubt_route] == [403, 403, 403], "L6", "a student cannot use teacher routes and a teacher cannot use student routes (403)",
                   f"got {teacher_route} / {student_route} / {doubt_route}"))
 
-    # unlinking removes the book's work and chapters from S1 at once; linking again brings them back
-    ctx.call("S1", "DELETE", f"/student/books/{a.id}/link")
+    # removing their own copy takes the chapters away from S1 at once: the tasks stay listed but say "upload this chapter"
+    own = db.scalar(select(Book).where(Book.owner_student_id == s1.id, Book.subject == a.subject))
+    ctx.call("S1", "DELETE", f"/student/books/{a.id}/link")  # the linked official book goes too, so nothing is left to search
+    removed = ctx.call("S1", "DELETE", f"/student/books/{own.id}").status_code if own is not None else None
     work = [x for x in ctx.call("S1", "GET", "/student/assignments").json()]
     chapter_code = ctx.call("S1", "POST", "/student/doubts", json={"text": "what is this", "chapter_id": str(ctx.chapters_a[0].id)}).status_code
     browse = ctx.call("S1", "GET", "/student/doubts/browse").json()
-    ctx.call("S1", "POST", f"/student/books/{a.id}/link")
-    back = ctx.call("S1", "GET", "/student/assignments").json()
-    out.append(ok(not work and chapter_code == 404 and browse == [] and len(back) >= 1, "L7",
-                  "after S1 unlinks book A its Today's Work is empty, its chapters are 404 and browse is empty; linking again brings the work back",
-                  f"after unlinking: {len(work)} assignments, chapter {chapter_code}, browse {len(browse)}, after relinking {len(back)}"))
+    ctx.copy_chapter_ids.clear()  # the route already removed them from the graph store
+    out.append(ok(removed == 204 and work and all(not x.get("resolved_book_id") for x in work) and chapter_code == 404 and browse == [], "L7",
+                  "after S1 removes its own copy (and unlinks book A) every task is 'upload this chapter', the chapters are 404 and browse is empty",
+                  f"remove gave {removed}; after it: {sum(1 for x in work if x.get('resolved_book_id'))} of {len(work)} tasks resolve to a book, chapter {chapter_code}, browse {len(browse)}"))
     return out
 
 
@@ -891,7 +951,10 @@ def run(engine, opts) -> tuple[list[str], int]:
                 results = fn(ctx)
             except Exception as exc:
                 db.rollback()
-                results = [("FAIL", "?", f"check crashed: {type(exc).__name__}: {str(exc)[:250]}")]
+                tb = exc.__traceback__
+                while tb.tb_next:
+                    tb = tb.tb_next
+                results = [("FAIL", "?", f"check crashed: {type(exc).__name__}: {str(exc)[:250]} (at line {tb.tb_lineno} of {tb.tb_frame.f_code.co_filename.rsplit('/', 1)[-1]})")]
         for status, tag, message in results:
             counts[status] += 1
             lines.append(f"{status:<6} {tag:<4} {message}")
@@ -912,6 +975,7 @@ def run(engine, opts) -> tuple[list[str], int]:
                     section("Search results across the whole run", check_no_retrieval_leak)
     finally:
         doubt_service.get_llm_provider, check_service.get_llm_provider = saved
+        cleanup_copies(ctx)
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(session_dependency, None)
         db.close()

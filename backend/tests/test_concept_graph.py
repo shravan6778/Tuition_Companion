@@ -230,16 +230,13 @@ def test_propose_links_validates_retries_and_gives_up():
 
 # ---- end to end through the API --------------------------------------------------------------
 
-def test_upload_builds_graph_and_exposes_it_to_teacher_and_linked_students(client, session_factory):
-    th, book_id, ch = setup_chapter(client, session_factory)
-    _, sh = make_user(session_factory, Role.student, "student1")
-    join_room_of(client, session_factory, th, sh)
-    client.post(f"/student/books/{book_id}/link", headers=sh)
+def test_upload_builds_graph_and_exposes_it_to_its_owner(client, session_factory):
+    sh, book_id, ch = setup_chapter(client, session_factory)
 
-    assert upload(client, th, book_id, ch, _text_pdf("alpha idea", "beta idea", "gamma idea")).status_code == 202
-    assert chapter_status(client, th, book_id, ch)["status"] == "ready"
+    assert upload(client, sh, book_id, ch, _text_pdf("alpha idea", "beta idea", "gamma idea")).status_code == 202
+    assert chapter_status(client, sh, book_id, ch)["status"] == "ready"
 
-    g = client.get(f"/teacher/books/{book_id}/chapters/{ch}/graph", headers=th).json()
+    g = client.get(f"/student/books/{book_id}/chapters/{ch}/graph", headers=sh).json()
     names = {n["id"]: n["name"] for n in g["nodes"]}
     assert sorted(names.values()) == ["alpha idea", "beta idea", "gamma idea"]
     # fake LLM chains each concept onto the previous one
@@ -247,32 +244,32 @@ def test_upload_builds_graph_and_exposes_it_to_teacher_and_linked_students(clien
         ("alpha idea", "beta idea"), ("beta idea", "gamma idea")}
     assert g["report"]["llm_linking"] == "done"
 
-    assert client.get(f"/student/books/{book_id}/chapters/{ch}/graph", headers=sh).json()["edges"] == g["edges"]
-    pages = client.get(f"/teacher/books/{book_id}/chapters/{ch}/pages", headers=th).json()
+    pages = client.get(f"/student/books/{book_id}/chapters/{ch}/pages", headers=sh).json()
     linked = [c for p in pages for c in p["concepts"] if c["prerequisite_ids"]]
     assert len(linked) == 2
 
 
 def test_graph_endpoints_enforce_access(client, session_factory):
-    th, book_id, ch = setup_chapter(client, session_factory)
-    upload(client, th, book_id, ch, _text_pdf("alpha idea", "beta idea"))
-    _, other = make_user(session_factory, Role.teacher, "teacherb")
-    _, sh = make_user(session_factory, Role.student, "student1")
-    url_t, url_s = f"/teacher/books/{book_id}/chapters/{ch}/graph", f"/student/books/{book_id}/chapters/{ch}/graph"
+    sh, book_id, ch = setup_chapter(client, session_factory)
+    upload(client, sh, book_id, ch, _text_pdf("alpha idea", "beta idea"))
+    _, other = make_user(session_factory, Role.student, "studentb")
+    _, th = make_user(session_factory, Role.teacher, "teachera")
+    url = f"/student/books/{book_id}/chapters/{ch}/graph"
 
-    assert client.get(url_t, headers=other).status_code == 404  # someone else's private book
-    assert client.get(url_s, headers=sh).status_code == 404  # student hasn't linked it
+    assert client.get(url, headers=sh).status_code == 200  # the owner: no linking step for a private book
+    assert client.get(url, headers=other).status_code == 404  # someone else's private book
+    assert client.get(url, headers=th).status_code == 403  # a teacher has no route to a student's graph...
+    assert client.get(f"/teacher/books/{book_id}/chapters/{ch}/graph", headers=th).status_code in (404, 405)  # ...nor a teacher one
     join_room_of(client, session_factory, th, sh)
-    client.post(f"/student/books/{book_id}/link", headers=sh)
-    assert client.get(url_s, headers=sh).status_code == 200
+    assert client.get(f"/teacher/books/{book_id}/chapters/{ch}/graph", headers=th).status_code in (404, 405)  # not even from their room
     assert client.get(f"/student/books/{book_id}/chapters/{uuid.uuid4()}/graph", headers=sh).status_code == 404
 
 
 def test_reupload_replaces_graph_without_stale_edges(client, session_factory):
-    th, book_id, ch = setup_chapter(client, session_factory)
-    upload(client, th, book_id, ch, _text_pdf("alpha idea", "beta idea", "gamma idea"))
-    upload(client, th, book_id, ch, _text_pdf("delta idea", "epsilon idea"))
-    g = client.get(f"/teacher/books/{book_id}/chapters/{ch}/graph", headers=th).json()
+    sh, book_id, ch = setup_chapter(client, session_factory)
+    upload(client, sh, book_id, ch, _text_pdf("alpha idea", "beta idea", "gamma idea"))
+    upload(client, sh, book_id, ch, _text_pdf("delta idea", "epsilon idea"))
+    g = client.get(f"/student/books/{book_id}/chapters/{ch}/graph", headers=sh).json()
     assert sorted(n["name"] for n in g["nodes"]) == ["delta idea", "epsilon idea"]
     assert len(g["edges"]) == 1
     with session_factory() as db:
@@ -283,7 +280,7 @@ def test_reupload_replaces_graph_without_stale_edges(client, session_factory):
 
 
 def test_linking_failure_fails_the_chapter_and_rolls_everything_back(client, session_factory, monkeypatch):
-    th, book_id, ch = setup_chapter(client, session_factory)
+    sh, book_id, ch = setup_chapter(client, session_factory)
 
     class PagesOkLinkingBroken:
         model_name = "x"
@@ -294,8 +291,8 @@ def test_linking_failure_fails_the_chapter_and_rolls_everything_back(client, ses
             return CountingLLM().complete_json(system, user).replace("Matter", user.split("TEXT:\n")[-1][:12])
 
     use_llm(monkeypatch, PagesOkLinkingBroken())
-    upload(client, th, book_id, ch, _text_pdf("first page text", "second page text"))
-    st = chapter_status(client, th, book_id, ch)
+    upload(client, sh, book_id, ch, _text_pdf("first page text", "second page text"))
+    st = chapter_status(client, sh, book_id, ch)
     assert st["status"] == "failed" and "depend on each other" in st["error_message"]
     assert page_count(session_factory, ch) == 0
     with session_factory() as db:

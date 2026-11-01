@@ -45,7 +45,7 @@ def chapter(book_id, concepts: list[tuple[str, list[float]]], pages: list[list[f
     nodes = [ConceptNode(str(uuid.uuid4()), name, f"About {name}", i, vec) for i, (name, vec) in enumerate(concepts)]
     return ChapterGraph(
         book_id=str(book_id), chapter_id=chapter_id, title="Smoke test chapter", sequence_num=1, is_reference=False,
-        owner_teacher_id=str(uuid.uuid4()), embedding_model="smoke-test", pages=page_nodes, concepts=nodes,
+        owner_student_id=str(uuid.uuid4()), embedding_model="smoke-test", pages=page_nodes, concepts=nodes,
         edges=[EdgeRow(nodes[c].id, nodes[p].id, "llm") for c, p in edges],
         concept_pages=[(n.id, page_nodes[0].id) for n in nodes],
     )

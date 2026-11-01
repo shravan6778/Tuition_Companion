@@ -21,7 +21,7 @@ def run(db_factory, book_id: uuid.UUID, confirm: bool) -> list[str]:
         if book is None:
             return ["Book not found."]
         if not book.is_reference:
-            return ["Refused: this is not an official book. Teachers delete their own books in the app."]
+            return ["Refused: this is not an official book. Students remove their own books in the app."]
         chapters = db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == book.id))
         pages = db.scalar(select(func.count()).select_from(Page).join(Chapter, Chapter.id == Page.chapter_id).where(Chapter.book_id == book.id))
         concepts = db.scalar(select(func.count()).select_from(Concept).join(Page, Page.id == Concept.page_id).join(Chapter, Chapter.id == Page.chapter_id).where(Chapter.book_id == book.id))

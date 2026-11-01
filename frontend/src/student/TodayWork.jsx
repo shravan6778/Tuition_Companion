@@ -20,13 +20,59 @@ import {
   useSubmit,
 } from "../shared/ui";
 import DoubtBox from "./DoubtBox";
+import HandInWork from "./HandInWork";
 
 const LEVEL = {
   subject: "Whole subject",
   chapter: "Chapter",
   concept: "Concepts",
   exercise: "Exercise",
+  items: "Picked items",
+  manual: "Homework",
 };
+
+// School homework has no book and no comprehension check: the student shows the work and the teacher judges it.
+function HomeworkCard({ a, onChanged }) {
+  const state = a.manual_state || "todo";
+  const pill = state === "todo" ? "open" : state === "submitted" ? "sent" : state;
+  return (
+    <div className="card">
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <div>
+          <h3 className="mb0">{a.title}</h3>
+          <div className="chips mt">
+            <span className="chip">Homework</span>
+            <span className="chip">{a.subject}</span>
+          </div>
+        </div>
+        <div className="row gap-s">
+          {a.due_date && (isOverdue(a.due_date) && state !== "good" ? <Pill kind="weak">Was due {fmtDate(a.due_date)}</Pill> : <span className="small">Due {fmtDate(a.due_date)}</span>)}
+          <Pill kind={pill} />
+        </div>
+      </div>
+      {a.description && <p className="pre mt mb0">{a.description}</p>}
+      {a.manual_feedback && (
+        <div className={`callout mt ${state === "good" ? "ok" : "risk"}`}>
+          <strong>From your teacher</strong>
+          <p className="mb0">{a.manual_feedback}</p>
+        </div>
+      )}
+      {state === "needs_work" && !a.manual_feedback && <p className="small mt mb0">Your teacher says this needs a bit more work. Have another go and send it again.</p>}
+      {state === "redo" && !a.manual_feedback && <p className="small mt mb0">Your teacher asked you to redo this. Send your new work when it is ready.</p>}
+      {state === "good" && !a.manual_feedback && <p className="small mt mb0">Your teacher marked this good.</p>}
+      {state === "submitted" && <p className="small mt mb0">Sent. Your teacher will take a look.</p>}
+      {state !== "good" && (
+        <div className="mt">
+          {state === "submitted" ? (
+            <details><summary>Send different work</summary><div className="mt"><HandInWork assignmentId={a.id} onSent={onChanged} /></div></details>
+          ) : (
+            <HandInWork assignmentId={a.id} onSent={onChanged} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function DoubtHistory({ assignmentId, refreshKey }) {
   const state = useLoad(
@@ -177,14 +223,18 @@ export default function TodayWork() {
                   </Empty>
                 </div>
               ) : (
-                work.map((a) => (
-                  <AssignmentCard
-                    key={a.id}
-                    a={a}
-                    checks={checks}
-                    onChanged={state.reload}
-                  />
-                ))
+                work.map((a) =>
+                  a.level === "manual" ? (
+                    <HomeworkCard key={a.id} a={a} onChanged={state.reload} />
+                  ) : (
+                    <AssignmentCard
+                      key={a.id}
+                      a={a}
+                      checks={checks}
+                      onChanged={state.reload}
+                    />
+                  ),
+                )
               )}
 
               {tests.length > 0 && (

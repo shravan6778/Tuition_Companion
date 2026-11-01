@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 // Callable function; always resolves to { data }
 export async function api(path, options = {}) {
@@ -35,6 +35,18 @@ export async function api(path, options = {}) {
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   return { data };
+}
+
+// A binary response (a stored photo) as a Blob. Sends the session cookie like every other call.
+export async function apiBlob(path) {
+  const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    const err = new Error(typeof errorData.detail === "string" ? errorData.detail : `Request failed with status ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.blob();
 }
 
 // Convenience methods

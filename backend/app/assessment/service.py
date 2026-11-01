@@ -25,7 +25,7 @@ from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.assignments import service as assignment_service
 from app.llm import get_llm_provider
-from app.models import Assignment, AssignmentCheck, CheckQuestion, Concept, Page, User
+from app.models import Assignment, AssignmentCheck, AssignmentLevel, CheckQuestion, Concept, Page, User
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,23 @@ def _llm():
         return None
 
 
-def _write(db: Session, llm, q: CheckQuestion, already: list[str]) -> None:
+def _focus_by_concept(db: Session, student: User, assignment: Assignment | None) -> dict[uuid.UUID, str]:
+    """Item-level assignments: for each concept, the picked items (label + text) that test it in THIS student's copy.
+    Empty for every other level, or when the assignment or the student's chapter is gone."""
+    if assignment is None or assignment.level != AssignmentLevel.ITEMS:
+        return {}
+    _, chapter = assignment_service.resolve_student_target(db, student, assignment)
+    if chapter is None:
+        return {}
+    resolved = assignment_service.resolve_items(db, assignment, chapter)
+    focus: dict[uuid.UUID, list[str]] = {}
+    for item in resolved.items:
+        for concept in assignment_service.concepts_of_items(db, chapter, [item]):
+            focus.setdefault(concept.id, []).append(f"- {item.label} ({item.kind.replace('_', ' ')}): {(item.text or '')[:400]}")
+    return {cid: "\n".join(lines[:4]) for cid, lines in focus.items()}
+
+
+def _write(db: Session, llm, q: CheckQuestion, already: list[str], focus: str = "") -> None:
     """Fill one planned question from its concept's own page. Sets ready or failed; never leaves a half-written one."""
     concept = db.get(Concept, q.concept_id) if q.concept_id else None
     page = db.get(Page, concept.page_id) if concept is not None else None
@@ -60,7 +76,7 @@ def _write(db: Session, llm, q: CheckQuestion, already: list[str]) -> None:
         return
     try:
         made = checks.generate_question(llm, str(concept.id), concept.name, concept.description or "", page.content_text,
-                                        already_asked=already, seed=str(q.id))
+                                        already_asked=already, seed=str(q.id), focus=focus)
     except (ProcessingError, RuntimeError):
         logger.warning("Check question could not be written", exc_info=True)
         q.status = "failed"
@@ -70,12 +86,14 @@ def _write(db: Session, llm, q: CheckQuestion, already: list[str]) -> None:
 
 def _fill(db: Session, check: AssignmentCheck) -> None:
     llm = _llm()
+    student = db.get(User, check.student_id)
+    focus = _focus_by_concept(db, student, db.get(Assignment, check.assignment_id) if check.assignment_id else None)
     for q in check.questions:
         if q.status == "ready":
             continue
         q.status = "pending"
         already = [o.question for o in check.questions if o.status == "ready" and o.concept_id == q.concept_id and o.question]
-        _write(db, llm, q, already)
+        _write(db, llm, q, already, focus.get(q.concept_id, "") if q.concept_id else "")
         db.commit()  # each question is kept as soon as it exists: a crash loses at most the one being written
 
 
@@ -91,7 +109,13 @@ def _ask_first(db: Session, student: User, concept_ids: list[uuid.UUID]) -> list
 
 
 def start_check(db: Session, student: User, assignment: Assignment) -> AssignmentCheck:
-    """Mark complete. Resumes the open check (retrying its failed questions) or opens a new one."""
+    """Mark complete. Resumes the open check (retrying its failed questions) or opens a new one.
+
+    Never for a manual (homework) task: Rules.md wants book-grounded checks, and there is no book behind it. Its proof is the
+    student's photo or spoken answer plus the teacher's verdict (assignments/manual.py). The route answers that case itself;
+    this is the backstop so no other caller can make a model write questions for it."""
+    if assignment.level == AssignmentLevel.MANUAL:
+        raise HTTPException(409, "Homework tasks are verified by your teacher, not by a check")
     open_check = db.scalar(select(AssignmentCheck).where(
         AssignmentCheck.student_id == student.id, AssignmentCheck.assignment_id == assignment.id, AssignmentCheck.status == OPEN))
     if open_check is not None:
@@ -101,14 +125,17 @@ def start_check(db: Session, student: User, assignment: Assignment) -> Assignmen
     book, chapter = assignment_service.resolve_student_target(db, student, assignment)
     if assignment.chapter_title and chapter is None:
         raise HTTPException(409, "Upload this chapter to see this task.")
-    if chapter is not None:
+    if assignment.level == AssignmentLevel.ITEMS and chapter is not None:
+        # item + page scope: the concepts the picked items test (plus any the teacher ticked), nothing else of the chapter
+        available = assignment_service.resolve_items(db, assignment, chapter).concepts
+    elif chapter is not None:
         available = assignment_service.chapter_concepts(db, chapter.id)
     elif book is not None:
         available = assignment_service.subject_concepts(db, [book.id], assignment.subject)
     else:
         raise HTTPException(409, "Upload this chapter to see this task.")
     wanted_keys = {ac.concept_key for ac in assignment.concepts}
-    if wanted_keys:
+    if wanted_keys and assignment.level != AssignmentLevel.ITEMS:  # items level already resolved its own concept list
         available = [c for c in available if assignment_service.loose_key(c.name) in wanted_keys]
     concept_ids = [str(c.id) for c in available]
     plan = checks.plan_check(concept_ids, priority_ids=_ask_first(db, student, [c.id for c in available]))

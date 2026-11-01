@@ -1,4 +1,4 @@
-"""Delete books/chapters (teacher + admin), front-page reading that survives odd answers, drop_book, relaxed unresolved rule."""
+"""Delete books (student) and official books/chapters (admin), front-page reading that survives odd answers, drop_book, relaxed unresolved rule."""
 import json
 import uuid
 from datetime import datetime, timezone
@@ -48,62 +48,72 @@ def count(session_factory, model):
         return db.scalar(select(func.count()).select_from(model))
 
 
-# ---------------- teachers delete their own books and chapters ----------------
+# ---------------- students remove their own books ----------------
 
-def test_teacher_deletes_own_book_with_its_chapters_and_graph_copy(client, session_factory, store):
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    book = new_book(client, th)
+def test_student_removes_own_book_with_its_chapters_and_graph_copy(client, session_factory, store):
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    book = new_book(client, sh)
     ch_id = add_chapter_row(session_factory, book["id"])
-    assert client.delete(f"/teacher/books/{book['id']}", headers=th).status_code == 204
+    assert client.delete(f"/student/books/{book['id']}", headers=sh).status_code == 204
     assert count(session_factory, Book) == 0 and count(session_factory, Chapter) == 0 and count(session_factory, Page) == 0
     assert store.deleted == [uuid.UUID(ch_id)] or store.deleted == [ch_id]
-    assert client.delete(f"/teacher/books/{book['id']}", headers=th).status_code == 404
+    assert client.delete(f"/student/books/{book['id']}", headers=sh).status_code == 404
 
 
-def test_nobody_else_can_delete_my_book_and_official_books_are_not_deletable_here(client, session_factory, store):
-    _, ah = make_user(session_factory, Role.teacher, "teachera")
-    _, bh = make_user(session_factory, Role.teacher, "teacherb")
+def test_nobody_else_can_remove_my_book_and_official_books_are_not_removable_here(client, session_factory, store):
+    _, ah = make_user(session_factory, Role.student, "studenta")
+    _, bh = make_user(session_factory, Role.student, "studentb")
+    _, th = make_user(session_factory, Role.teacher, "teachera")
     book = new_book(client, ah)
-    assert client.delete(f"/teacher/books/{book['id']}", headers=bh).status_code == 404
+    assert client.delete(f"/student/books/{book['id']}", headers=bh).status_code == 404
+    assert client.delete(f"/student/books/{book['id']}", headers=th).status_code == 403  # a teacher has no such route
+    assert client.delete(f"/teacher/books/{book['id']}", headers=th).status_code in (404, 405)
     ref = ref_book(session_factory)
-    assert client.delete(f"/teacher/books/{ref}", headers=ah).status_code == 403
+    assert client.delete(f"/student/books/{ref}", headers=ah).status_code == 403
     assert count(session_factory, Book) == 2
 
 
-def test_deleting_a_book_unmarks_books_that_were_variants_of_it(client, session_factory, store):
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    base, variant = new_book(client, th), new_book(client, th, subject="Other")
-    assert client.post(f"/teacher/books/{variant['id']}/variant-of", json={"base_book_id": base["id"]}, headers=th).status_code == 200
-    assert client.delete(f"/teacher/books/{base['id']}", headers=th).status_code == 204
+def test_removing_an_official_book_unmarks_the_student_books_that_were_variants_of_it(client, session_factory, store, monkeypatch):
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    _, ah = make_user(session_factory, Role.teacher, "adminuser")
+    monkeypatch.setattr(settings, "admin_usernames", "adminuser")
+    ref = ref_book(session_factory)
+    body = {"board": "CBSE", "class_name": "Class 9", "subject": "Science", "publisher": "Other", "is_customized": True, "variant_of_id": ref}
+    variant = client.post("/student/books", json=body, headers=sh).json()
+    assert variant["variant_of_id"] == ref
+    assert client.delete(f"/admin/books/{ref}", headers=ah).status_code == 204
     with session_factory() as db:
         assert db.get(Book, uuid.UUID(variant["id"])).variant_of_id is None
 
 
-def test_a_chapter_being_processed_cannot_be_deleted_but_a_stuck_one_can(client, session_factory, store):
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    book = new_book(client, th)
+def test_a_book_being_processed_cannot_be_removed_but_a_stuck_one_can(client, session_factory, store):
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    book = new_book(client, sh)
     busy = add_chapter_row(session_factory, book["id"], "Busy", 1, ChapterStatus.PROCESSING, datetime.now(timezone.utc))
-    assert client.delete(f"/teacher/books/{book['id']}/chapters/{busy}", headers=th).status_code == 409
-    assert client.delete(f"/teacher/books/{book['id']}", headers=th).status_code == 409
-    stuck = add_chapter_row(session_factory, book["id"], "Stuck", 2, ChapterStatus.PROCESSING, datetime(2020, 1, 1, tzinfo=timezone.utc))
-    assert client.delete(f"/teacher/books/{book['id']}/chapters/{stuck}", headers=th).status_code == 204
+    assert client.delete(f"/student/books/{book['id']}", headers=sh).status_code == 409
+    with session_factory() as db:  # the job died long ago: the chapter is stuck, so it no longer blocks
+        db.get(Chapter, uuid.UUID(busy)).processing_started_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        db.commit()
+    assert client.delete(f"/student/books/{book['id']}", headers=sh).status_code == 204
+    assert count(session_factory, Chapter) == 0
 
 
-def test_delete_chapter_checks_it_belongs_to_that_book_and_book_survives(client, session_factory, store):
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    a, b = new_book(client, th), new_book(client, th, subject="Other")
-    ch = add_chapter_row(session_factory, a["id"])
-    assert client.delete(f"/teacher/books/{b['id']}/chapters/{ch}", headers=th).status_code == 404
-    assert client.delete(f"/teacher/books/{a['id']}/chapters/{ch}", headers=th).status_code == 204
+def test_admin_chapter_delete_checks_it_belongs_to_that_book_and_the_book_survives(client, session_factory, store, monkeypatch):
+    _, ah = make_user(session_factory, Role.teacher, "adminuser")
+    monkeypatch.setattr(settings, "admin_usernames", "adminuser")
+    a, b = ref_book(session_factory), ref_book(session_factory, subject="Other")
+    ch = add_chapter_row(session_factory, a)
+    assert client.delete(f"/admin/books/{b}/chapters/{ch}", headers=ah).status_code == 404
+    assert client.delete(f"/admin/books/{a}/chapters/{ch}", headers=ah).status_code == 204
     assert count(session_factory, Book) == 2 and count(session_factory, Chapter) == 0
 
 
 def test_graph_store_trouble_never_blocks_a_delete(client, session_factory, monkeypatch):
     monkeypatch.setattr(deletion, "get_graph_store", lambda: FakeStore(fail=True))
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    book = new_book(client, th)
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    book = new_book(client, sh)
     add_chapter_row(session_factory, book["id"])
-    assert client.delete(f"/teacher/books/{book['id']}", headers=th).status_code == 204
+    assert client.delete(f"/student/books/{book['id']}", headers=sh).status_code == 204
     assert count(session_factory, Chapter) == 0
 
 
@@ -112,9 +122,10 @@ def test_graph_store_trouble_never_blocks_a_delete(client, session_factory, monk
 def test_only_listed_administrators_can_delete_official_books_and_chapters(client, session_factory, store, monkeypatch):
     _, ah = make_user(session_factory, Role.teacher, "adminuser")
     _, th = make_user(session_factory, Role.teacher, "teachera")
+    _, sh = make_user(session_factory, Role.student, "studenta")
     ref = ref_book(session_factory)
     ch = add_chapter_row(session_factory, ref)
-    mine = new_book(client, th)
+    mine = new_book(client, sh)
     assert client.delete(f"/admin/books/{ref}", headers=ah).status_code == 403  # nobody is an administrator by default
     monkeypatch.setattr(settings, "admin_usernames", " AdminUser , someone ")
     assert client.delete(f"/admin/books/{ref}", headers=th).status_code == 403
@@ -175,7 +186,7 @@ def test_an_all_empty_answer_gets_a_second_look_and_never_crashes():
 
 
 def test_the_draft_says_so_when_nothing_could_be_read(client, session_factory, monkeypatch):
-    _, th = make_user(session_factory, Role.teacher, "teachera")
+    _, th = make_user(session_factory, Role.student, "studenta")
     with monkeypatch.context() as m:
         m.setattr("app.content_library.upload.extract_book_metadata", lambda provider, text: BookMetadata())
         body = post_front(client, th).json()

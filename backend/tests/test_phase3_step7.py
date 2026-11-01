@@ -34,32 +34,29 @@ def test_browse_lists_subject_book_and_only_the_ready_chapters(client, world):
     assert {c["id"] for c in book["chapters"]} == {world["ids"]["ch1"], world["ids"]["ch2"]}
 
 
-def test_browse_is_empty_for_a_student_who_linked_nothing(client, session_factory, world):
+def test_browse_is_empty_for_a_student_with_no_books(client, session_factory, world):
     _, other = make_user(session_factory, Role.student, "studentb")
     assert client.get("/student/doubts/browse", headers=other).json() == []
 
 
 def test_browse_groups_books_by_subject_ignoring_case_and_skips_books_without_a_ready_chapter(client, session_factory, world):
     with session_factory() as db:
-        old = db.get(Book, uuid.UUID(world["ids"]["book"]))
-        maths = Book(board="CBSE", class_name="Class 9", subject="science", publisher="Other", owner_teacher_id=old.owner_teacher_id)
-        empty = Book(board="CBSE", class_name="Class 9", subject="Maths", publisher="Pub", owner_teacher_id=old.owner_teacher_id)
+        owner = db.get(Book, uuid.UUID(world["ids"]["book"])).owner_student_id
+        maths = Book(board="CBSE", class_name="Class 9", subject="science", publisher="Other", is_reference=False, owner_student_id=owner)
+        empty = Book(board="CBSE", class_name="Class 9", subject="Maths", publisher="Pub", is_reference=False, owner_student_id=owner)
         db.add_all([maths, empty])
         db.flush()
         add_chapter(db, maths, "Motion", 1, [(1, "Motion is change of place " * 6, PageKind.CONTENT)], [(1, "Motion", "change of place")])
         add_chapter(db, empty, "Algebra", 1, [], status=ChapterStatus.PROCESSING)
         db.commit()
-        ids = (str(maths.id), str(empty.id))
-    for b in ids:
-        assert client.post(f"/student/books/{b}/link", headers=world["sh"]).status_code == 200
     body = client.get("/student/doubts/browse", headers=world["sh"]).json()
     assert [s["subject"] for s in body] == ["Science"] and len(body[0]["books"]) == 2  # 'science' joined 'Science'; Maths has nothing ready
 
 
-def test_browse_never_shows_another_teachers_book(client, session_factory, world):
-    other_teacher, _ = make_user(session_factory, Role.teacher, "teacherb")
+def test_browse_never_shows_another_students_book(client, session_factory, world):
+    other_student, _ = make_user(session_factory, Role.student, "studentb")
     with session_factory() as db:
-        book = Book(board="CBSE", class_name="Class 9", subject="History", publisher="P", owner_teacher_id=other_teacher.id)
+        book = Book(board="CBSE", class_name="Class 9", subject="History", publisher="P", is_reference=False, owner_student_id=other_student.id)
         db.add(book)
         db.flush()
         add_chapter(db, book, "Secret", 1, [(1, "Secret text " * 10, PageKind.CONTENT)], [(1, "Secret", "x")])
@@ -85,21 +82,20 @@ def test_the_same_doubt_in_another_chapter_points_to_where_the_books_do_cover_it
     assert body["message"] == service.CHAPTER_OUTSIDE and "assignment" not in body["message"]
 
 
-def test_without_a_chapter_every_linked_book_is_searched(client, world):
+def test_without_a_chapter_every_book_of_the_student_is_searched(client, world):
     body = client.post("/student/doubts", json={"text": TISSUE_Q}, headers=world["sh"]).json()
     assert body["status"] == "grounded" and body["chapter_id"] is None
 
 
-def test_a_doubt_the_books_do_not_cover_asks_the_teacher_via_the_chapters_book(client, world):
+def test_a_doubt_the_books_do_not_cover_asks_the_student_to_upload_the_chapter(client, world):
     body = ask_chapter(client, world, NOISE_Q, "ch1").json()
-    book = world["ids"]["book"]
-    assert body["status"] == "not_in_book" and body["request_chapter"] == {"book_id": book, "path": f"/student/books/{book}/chapter-requests"}
+    assert body["status"] == "not_in_book" and body["request_chapter"] is None and "Upload this chapter" in body["message"]
 
 
 def test_a_chapter_that_is_not_ready_or_not_the_students_is_404_and_saves_nothing(client, session_factory, world):
     assert ask_chapter(client, world, TISSUE_Q, "ch3").status_code == 404  # empty chapter
     assert ask_chapter(client, world, TISSUE_Q, "00000000-0000-0000-0000-000000000000").status_code == 404
-    _, other = make_user(session_factory, Role.student, "studentb")  # has not linked the book
+    _, other = make_user(session_factory, Role.student, "studentb")  # not the owner of the book
     assert ask_chapter(client, world, TISSUE_Q, "ch1", headers=other).status_code == 404
     assert rows(session_factory) == []
 
@@ -109,8 +105,8 @@ def test_an_assignment_and_a_chapter_together_are_refused(client, world):
     assert res.status_code == 422
 
 
-def test_an_unlinked_book_stops_its_chapters_being_searched(client, world):
-    assert client.delete(f"/student/books/{world['ids']['book']}/link", headers=world["sh"]).status_code == 204
+def test_a_removed_book_stops_its_chapters_being_searched(client, world):
+    assert client.delete(f"/student/books/{world['ids']['book']}", headers=world["sh"]).status_code == 204
     assert ask_chapter(client, world, TISSUE_Q, "ch1").status_code == 404
     assert client.get("/student/doubts/browse", headers=world["sh"]).json() == []
 

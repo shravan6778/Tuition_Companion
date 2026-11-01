@@ -110,7 +110,7 @@ def test_a_page_that_is_not_in_the_students_books_is_not_in_book(client, session
     reads(monkeypatch, ("photosynthesis converts sunlight water and carbon dioxide into glucose and oxygen in the green leaves " * 5))
     body = snap(client, world, assignment=assign(client, world)).json()
     assert body["kind"] == "page" and body["status"] == "not_in_book" and body["page"] is None
-    assert body["request_chapter"]["path"].endswith("/chapter-requests") and doubt_rows(session_factory) == []
+    assert body["request_chapter"] is None and "Upload this chapter" in body["message"] and doubt_rows(session_factory) == []
 
 
 def test_a_narrow_assignment_only_offers_its_own_concepts(client, world, monkeypatch):
@@ -161,9 +161,9 @@ def test_only_students_can_send_photos(client, world, monkeypatch):
 # ---- picking a concept never reaches another book ------------------------------------------------------------
 
 def test_a_picked_concept_must_be_in_the_students_own_books(client, session_factory, world):
-    owner, _ = make_user(session_factory, Role.teacher, "teacherc")
+    owner, _ = make_user(session_factory, Role.student, "studentz")
     with session_factory() as db:
-        secret = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="X", owner_teacher_id=owner.id)
+        secret = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="X", is_reference=False, owner_student_id=owner.id)
         db.add(secret)
         db.flush()
         ch = add_chapter(db, secret, "Secret", 1, [(1, "photosynthesis converts sunlight into glucose", PageKind.CONTENT)],

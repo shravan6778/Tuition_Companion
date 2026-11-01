@@ -49,8 +49,8 @@ def delete_chapter(db: Session, chapter: Chapter) -> None:
 
 
 def delete_book(db: Session, book: Book) -> None:
-    if book.is_reference:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Reference books are read-only")
+    """Callers decide who may delete what: a student only reaches their own books (access.get_owned_book refuses official
+    ones), and official books go through the administrator route or the drop_book tool."""
     chapters = list(book.chapters)
     if any(is_actively_processing(c) for c in chapters):
         raise HTTPException(status.HTTP_409_CONFLICT, "A chapter of this book is still being processed. Wait for it to finish, then delete the book.")

@@ -57,7 +57,7 @@ def _seed_chapter_with_memgraph(db):
                 title=chapter.title,
                 sequence_num=1,
                 is_reference=True,
-                owner_teacher_id=None,
+                owner_student_id=None,
                 embedding_model="fake-embedding",
                 pages=[PageNode(str(p1.id), 1, vec), PageNode(str(p2.id), 2, vec), PageNode(str(p3.id), 3, vec)],
                 concepts=[

@@ -66,7 +66,7 @@ def index(db, chapter, embedder, store=None):
 
 
 def make_book(db, subject="Science", reference=True, owner=None):
-    book = Book(board="CBSE", class_name="9", subject=subject, publisher="NCERT", is_reference=reference, owner_teacher_id=owner)
+    book = Book(board="CBSE", class_name="9", subject=subject, publisher="NCERT", is_reference=reference, owner_student_id=owner)
     db.add(book)
     db.flush()
     return book
@@ -289,7 +289,7 @@ def test_try_doubt_photo_command_covers_each_outcome(world, embedder):
     assert "retrieval: grounded" in run("what is a tissue group of similar cells")
     page = run(CELL + " " + TISSUE + " " + words("filler", 30))
     assert "classified as: page" in page and "pick the concept" in page
-    assert "ask your teacher" in run("zebra quantum jukebox harmonica harmonica quantum zebra jukebox", photo=True)
+    assert "upload this chapter" in run("zebra quantum jukebox harmonica harmonica quantum zebra jukebox", photo=True)
 
 
 # ---- the comprehension check -------------------------------------------------------------------------------

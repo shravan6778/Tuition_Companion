@@ -1,6 +1,7 @@
 """Mark complete and take the check (Phase 3 step 5).
 
-    POST /student/assignments/{id}/complete   open (or resume) the check; the questions come back WITHOUT their keys
+    POST /student/assignments/{id}/complete   open (or resume) the check; the questions come back WITHOUT their keys.
+                                              A manual homework task gets no check: see assignments/manual.py
     GET  /student/checks/{id}                 resume an open check, or read a submitted one with its answers
     POST /student/checks/{id}/submit          grade by code; the key and the explanations are revealed only here
     GET  /student/checks                      this student's checks, newest first"""
@@ -13,13 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.assessment import service
-from app.assignments import service as assignments
+from app.assignments import manual, service as assignments
 from app.auth.dependencies import require_student
 from app.core.config import settings
 from app.core.ratelimit import limiter
 from app.db.session import get_db
 from app.assessment import mastery
-from app.models import AssignmentCheck, Concept, MasteryEvent
+from app.models import AssignmentCheck, AssignmentLevel, Concept, MasteryEvent
 
 router = APIRouter(prefix="/student", tags=["checks"], dependencies=[Depends(require_student)])
 mastery_router = APIRouter(prefix="/student/mastery", tags=["mastery"], dependencies=[Depends(require_student)])
@@ -117,9 +118,13 @@ def _out(db: Session, check: AssignmentCheck) -> CheckOut:
     return out
 
 
-@router.post("/assignments/{assignment_id}/complete", response_model=CheckOut)
+@router.post("/assignments/{assignment_id}/complete", response_model=CheckOut | manual.ManualCompletionOut)
 def mark_complete(assignment_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
+    """A book task opens a comprehension check. A manual (homework) task never does: Rules.md wants book-grounded checks and
+    there is no book, so it answers with where the hand-in stands (`kind: "manual"`), and no model is called."""
     assignment = assignments.get_student_assignment(db, student, assignment_id)  # 404 first: nothing is learned from the rate limit
+    if assignment.level == AssignmentLevel.MANUAL:
+        return manual.completion(db, student, assignment)
     limiter.check("check", str(student.id), settings.rate_checks_per_hour, 3600)
     return _out(db, service.start_check(db, student, assignment))
 

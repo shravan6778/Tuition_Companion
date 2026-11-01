@@ -36,16 +36,29 @@ class Scope:
     """What an assignment covers. Chapter / subject level: `chapter_ids` only (a hit is inside if its chapter is). Concept
     or exercise level: also `concept_ids` and `page_ids` (the pages those concepts are explained on), which narrow it
     below the chapter, so a doubt about ANOTHER concept of the same chapter is `outside_assignment` too.
+    Items level: `item_ids` are the picked examples / questions / figures. Only those items count as inside, together
+    with the pages they sit on (`page_ids`) and the concepts they test (`concept_ids`); with NO concepts nothing
+    concept-like is inside, so the chapter is never silently let back in.
     Empty scope = nothing is inside it. Build one from concepts with `scope_for_concepts`."""
     chapter_ids: set[str] = field(default_factory=set)
     concept_ids: set[str] = field(default_factory=set)
     page_ids: set[str] = field(default_factory=set)
+    item_ids: set[str] = field(default_factory=set)
 
     def has_concept(self, concept_id: str, chapter_id: str) -> bool:
-        return concept_id in self.concept_ids or (not self.concept_ids and chapter_id in self.chapter_ids)
+        if self.concept_ids:
+            return concept_id in self.concept_ids
+        if self.item_ids:
+            return False
+        return chapter_id in self.chapter_ids
 
     def has_page(self, page_id: str, chapter_id: str) -> bool:
         return page_id in self.page_ids if self.page_ids else chapter_id in self.chapter_ids
+
+    def has_item(self, item_id: str, page_id: str, chapter_id: str) -> bool:
+        if self.item_ids:
+            return item_id in self.item_ids
+        return self.has_page(page_id, chapter_id)
 
 
 def scope_for_concepts(db: Session, concepts: Sequence[Concept]) -> Scope:
@@ -82,6 +95,7 @@ class RetrievedItem:
     similarity: float
 
 
+@dataclass
 class RetrievedPage:
     page_id: str
     page_number: int
@@ -130,7 +144,7 @@ def retrieve(db: Session, text: str, *, embedder, store, book_ids: Sequence[uuid
     if scope is not None:
         inside_concepts = [h for h in concept_hits if scope.has_concept(h.concept_id, h.chapter_id)]
         inside_pages = [h for h in page_hits if scope.has_page(h.page_id, h.chapter_id)]
-        inside_items = [h for h in item_hits if scope.has_page(h.page_id, h.chapter_id)]
+        inside_items = [h for h in item_hits if scope.has_item(h.item_id, h.page_id, h.chapter_id)]
     else:
         inside_concepts, inside_pages, inside_items = concept_hits, page_hits, item_hits
     inside_concepts, inside_pages, inside_items = inside_concepts[:k], inside_pages[:k], inside_items[:k]

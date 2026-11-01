@@ -1,5 +1,5 @@
-"""Administrator actions on OFFICIAL books (who is an administrator: ADMIN_USERNAMES). Teachers delete their own
-books through the admin routes; these routes exist only for the official library."""
+"""Administrator actions on OFFICIAL books (who is an administrator: ADMIN_USERNAMES). Students remove their own
+books themselves (DELETE /student/books/{id}); these routes exist only for the official library."""
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status

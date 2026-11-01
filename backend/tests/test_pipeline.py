@@ -8,20 +8,20 @@ from app.models import Book, Chapter, Concept, Page, Role, User
 from app.pipeline.orchestrator import PipelineOrchestrator
 
 
-def _teacher(session_factory):
+def _student(session_factory):
     with session_factory() as db:
-        u = User(supertokens_user_id="st-t1", name="T", username="teach1", phone="1", role=Role.teacher)
+        u = User(supertokens_user_id="st-s1", name="S", username="student1", phone="1", role=Role.student, link_code="LINKS001")
         db.add(u)
         db.commit()
         db.refresh(u)
         db.expunge(u)
-    return u, {"Authorization": "Bearer st-t1"}
+    return u, {"Authorization": "Bearer st-s1"}
 
 
 def _book_and_chapter(db, owner=None):
-    """Owned by `owner` (a teacher) if given, otherwise a reference book."""
+    """Owned by `owner` (a student) if given, otherwise a reference book."""
     book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Test",
-                is_reference=owner is None, owner_teacher_id=owner.id if owner else None)
+                is_reference=owner is None, owner_student_id=owner.id if owner else None)
     db.add(book)
     db.flush()
     ch = Chapter(book_id=book.id, title="Matter", sequence_num=1)
@@ -64,20 +64,20 @@ def test_app_boots(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_teacher_upload_end_to_end_with_fake_providers(client, session_factory):
-    teacher, th = _teacher(session_factory)
+def test_student_upload_end_to_end_with_fake_providers(client, session_factory):
+    student, sh = _student(session_factory)
     with session_factory() as db:
-        book_id, ch_id = _book_and_chapter(db, owner=teacher)
+        book_id, ch_id = _book_and_chapter(db, owner=student)
     res = client.post(
-        f"/teacher/books/{book_id}/chapters/{ch_id}/pages/upload",
+        f"/student/books/{book_id}/chapters/{ch_id}/pages/upload",
         files={"file": ("p.pdf", _text_pdf("Matter is anything with mass", "Particles of matter attract"), "application/pdf")},
-        headers=th,
+        headers=sh,
     )
     assert res.status_code == 202, res.text
     assert res.json()["status"] == "processing"  # the response returns before processing finishes
 
     # TestClient runs the background job before returning control, so by now it is done.
-    pages = client.get(f"/teacher/books/{book_id}/chapters/{ch_id}/pages", headers=th).json()
+    pages = client.get(f"/student/books/{book_id}/chapters/{ch_id}/pages", headers=sh).json()
     assert [p["page_number"] for p in pages] == [1, 2]
     assert all(p["concepts"] for p in pages)
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "gpt-4.1-mini"  # on Azure this is your DEPLOYMENT name
+    vision_model: str = ""  # blank = llm_model; must point to a vision-capable deployment
     llm_timeout_s: int = 60
     concept_max_chars: int = 12000  # per-page LLM input cap
     concept_merge_similarity: float = 0.92  # name-embedding cosine at/above which two concepts in a chapter are one
@@ -57,6 +58,11 @@ class Settings(BaseSettings):
     rate_checks_per_hour: int = 10  # each new check costs up to CHECK_MAX_QUESTIONS model calls
     rate_doubt_photos_per_hour: int = 15  # each photo costs one OCR call (on top of the doubt's embedding call)
     max_doubt_photo_mb: int = 8  # a phone photo; larger is refused before any OCR is paid for
+    # manual (school homework) tasks: the student's photo or spoken answer, reviewed by the teacher. No model call is made.
+    rate_manual_submissions_per_hour: int = 20
+    max_manual_photo_mb: int = 8
+    manual_voice_min_words: int = 3  # a spoken answer shorter than this is most likely a mis-tap
+    manual_text_max_chars: int = 4000
     # --- page matching (pipeline/fingerprint.py, pipeline/matching.py)
     fingerprint_min_words: int = 15  # shorter pages (covers, blanks) are never fingerprinted or matched
     reuse_similarity: float = 0.95  # >= this: same page, reuse its concepts (no LLM call)

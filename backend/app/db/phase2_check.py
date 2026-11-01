@@ -137,12 +137,14 @@ def check_front_pages(db: Session) -> list[Result]:
     return out
 
 
-def _throwaway_teacher(db: Session) -> User:
+def _throwaway_student(db: Session) -> User:
+    """Books are private to the student who uploaded them, so the simulated editions belong to a throwaway student."""
     tag = uuid.uuid4().hex[:10]
-    teacher = User(supertokens_user_id=f"check-{tag}", name="phase2 check", username=f"chk{tag}"[:30], phone="0" + tag[:9], role=Role.teacher)
-    db.add(teacher)
+    student = User(supertokens_user_id=f"check-{tag}", name="phase2 check", username=f"chk{tag}"[:30], phone="0" + tag[:9],
+                   role=Role.student, link_code=tag.upper()[:8])
+    db.add(student)
     db.flush()
-    return teacher
+    return student
 
 
 def _shortened(title: str, i: int) -> str:
@@ -155,7 +157,7 @@ def check_structure(db: Session) -> list[Result]:
     out: list[Result] = []
     nested = db.begin_nested()
     try:
-        teacher = _throwaway_teacher(db)
+        student = _throwaway_student(db)
         books = [b for b in _official(db) if len(structure._titles(db, b.id, ready_only=True)) >= 2]
         if not books:
             return [("FAIL", "S1", "no official book with two ready chapters to compare titles against")]
@@ -166,22 +168,22 @@ def check_structure(db: Session) -> list[Result]:
                 "titles with 'Unit n:' and a subtitle": [f"Unit {i}: {t} (a complete overview)" for i, t in enumerate(titles, 1)],
             }
             for label, edition in variants.items():
-                book = Book(board="X", class_name="9", subject="check", publisher="check", is_reference=False, owner_teacher_id=teacher.id)
+                book = Book(board="X", class_name="9", subject="check", publisher="check", is_reference=False, owner_student_id=student.id)
                 db.add(book)
                 db.flush()
                 for i, t in enumerate(edition, 1):
                     db.add(Chapter(book_id=book.id, title=t, sequence_num=i, status=ChapterStatus.EMPTY))
                 db.flush()
-                hit = next((h for h in structure.suggest(db, book, teacher.id) if h["book"].id == official.id), None)
+                hit = next((h for h in structure.suggest(db, book, student.id) if h["book"].id == official.id), None)
                 out.append(("PASS" if hit else "FAIL", "S1", f"{_label(official)}: simulated edition with {label} -> "
                             + (f"suggested ({hit['matched_chapters']}/{hit['chapters_checked']} chapters)" if hit else "NOT suggested")))
-            control = Book(board="X", class_name="9", subject="check", publisher="check", is_reference=False, owner_teacher_id=teacher.id)
+            control = Book(board="X", class_name="9", subject="check", publisher="check", is_reference=False, owner_student_id=student.id)
             db.add(control)
             db.flush()
             for i, t in enumerate(["Gravitation and Free Fall", "Work, Power and Energy", "Sound Waves"], 1):
                 db.add(Chapter(book_id=control.id, title=t, sequence_num=i, status=ChapterStatus.EMPTY))
             db.flush()
-            wrong = any(h["book"].id == official.id for h in structure.suggest(db, control, teacher.id))
+            wrong = any(h["book"].id == official.id for h in structure.suggest(db, control, student.id))
             out.append(("FAIL" if wrong else "PASS", "S2", f"{_label(official)}: book with unrelated chapter titles -> " + ("WRONGLY suggested" if wrong else "not suggested")))
         out.append(("REVIEW", "S3", "Layer 3 was tested on SIMULATED editions made from the real titles; it will not match an edition that rewords titles "
                                     "heavily (e.g. 'Matter in Our Surroundings' vs 'Matter around us'); the page signals cover that case"))
@@ -200,8 +202,8 @@ def check_feedback(db: Session) -> list[Result]:
         official = next(iter(_official(db)), None)
         if official is None:
             return [("FAIL", "F1", "no official book to use as a base")]
-        teacher = _throwaway_teacher(db)
-        mine = Book(board="X", class_name="9", subject="check", publisher="check", is_reference=False, owner_teacher_id=teacher.id)
+        student = _throwaway_student(db)
+        mine = Book(board="X", class_name="9", subject="check", publisher="check", is_reference=False, owner_student_id=student.id)
         db.add(mine)
         db.flush()
         evidence = {"signal": "pages", "coverage": 0.5, "avg_similarity": 0.91}

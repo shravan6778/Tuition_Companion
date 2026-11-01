@@ -17,16 +17,19 @@ NOISE_Q = "zebra quantum jukebox harmonica"
 
 @pytest.fixture()
 def world(client, session_factory, indexing_on, monkeypatch):
-    """A teacher's book (Cells, Force) indexed into the fake store, one student who linked it and sits in the room."""
+    """A teacher's book (Cells, Force) indexed into the fake store, its owner (studenta), who sits in the room."""
     monkeypatch.setattr(settings, "retrieval_min_similarity", 0.5)
     teacher, th, ids, concepts = make_world(session_factory)
     for chapter in (ids["ch1"], ids["ch2"]):
         index_chapter(session_factory, uuid.UUID(chapter))
-    student, sh, room = room_with_student(client, session_factory, th, link_book=ids["book"])
+    student, sh, room = room_with_student(client, session_factory, th)
     return dict(th=th, sh=sh, student=student, room=room, ids=ids, concepts=concepts)
 
 
 def assign(client, w, level="chapter", chapter="ch1", **extra):
+    """A concept assignment sits inside one chapter now, so `chapter=None` means ch1 for that level (and none for subject)."""
+    if level in ("concept", "items", "exercise") and chapter is None:
+        chapter = "ch1"
     body = dict(level=level, book_id=w["ids"]["book"], room_id=w["room"]["id"], **extra)
     if chapter:
         body["chapter_id"] = w["ids"][chapter]
@@ -58,19 +61,18 @@ def test_doubt_inside_the_assignment_is_grounded_with_page_text_and_stored(clien
 
 
 def test_a_narrower_assignment_sends_the_doubt_to_ask_a_doubt(client, world):
-    cell_only = assign(client, world, level="concept", chapter=None, concept_ids=[world["concepts"]["Cell"]])
+    cell_only = assign(client, world, level="concept", chapter="ch1", concept_ids=[world["concepts"]["Cell"]])
     body = ask(client, world, TISSUE_Q, cell_only).json()
     assert body["status"] == "outside_assignment" and body["pages"] == []
     assert "Tissue" in [h["name"] for h in body["elsewhere"]] and "Ask a Doubt" in body["message"]
 
 
-def test_a_doubt_the_books_do_not_cover_points_to_the_chapter_request_flow(client, session_factory, world):
+def test_a_doubt_the_books_do_not_cover_asks_the_student_to_upload_the_chapter(client, session_factory, world):
     a = assign(client, world)
     body = ask(client, world, NOISE_Q, a).json()
     assert body["status"] == "not_in_book" and body["pages"] == [] and body["concepts"] == []
-    assert body["request_chapter"] == {"book_id": world["ids"]["book"], "path": f"/student/books/{world['ids']['book']}/chapter-requests"}
-    # the path it names is the real, existing route
-    assert client.post(body["request_chapter"]["path"], json={"chapter_hint": "Photosynthesis"}, headers=world["sh"]).status_code in (200, 201)
+    # the chapter-request flow is gone: students upload what is missing themselves, so there is nothing to point at
+    assert body["request_chapter"] is None and "Upload this chapter" in body["message"]
 
 
 def test_when_the_search_services_are_down_it_says_so_and_never_guesses(client, session_factory, world, monkeypatch):
@@ -97,10 +99,10 @@ def test_a_student_with_no_linked_book_gets_not_in_book_not_everything(client, s
     assert ask(client, world, TISSUE_Q, headers=bare).json()["status"] == "not_in_book"
 
 
-def test_another_teachers_private_book_is_never_searched(client, session_factory, world):
-    secret_owner, _ = make_user(session_factory, Role.teacher, "teacherc")
+def test_another_students_private_book_is_never_searched(client, session_factory, world):
+    secret_owner, _ = make_user(session_factory, Role.student, "studentz")
     with session_factory() as db:
-        secret = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="X", owner_teacher_id=secret_owner.id)
+        secret = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="X", is_reference=False, owner_student_id=secret_owner.id)
         db.add(secret)
         db.flush()
         ch = add_chapter(db, secret, "Secret", 1, [(1, "photosynthesis converts sunlight water and carbon dioxide into glucose and oxygen in the chloroplast of green leaves", PageKind.CONTENT)],
@@ -123,10 +125,13 @@ def test_an_assignment_that_is_not_mine_is_404(client, session_factory, world):
         assert db.scalars(select(Doubt)).all() == []  # a refused doubt leaves no trace
 
 
-def test_unlinking_the_book_hides_the_assignment_and_its_doubt_button(client, world):
+def test_removing_the_book_makes_the_assignment_unavailable_and_the_doubt_is_refused(client, world):
     a = assign(client, world)
-    client.delete(f"/student/books/{world['ids']['book']}/link", headers=world["sh"])
-    assert ask(client, world, TISSUE_Q, a).status_code == 404
+    assert client.delete(f"/student/books/{world['ids']['book']}", headers=world["sh"]).status_code == 204
+    detail = client.get(f"/student/assignments/{a['id']}", headers=world["sh"]).json()
+    assert detail["available"] is False and detail["availability_message"] == "Upload this chapter to see this task."
+    res = ask(client, world, TISSUE_Q, a)  # nothing of the removed book can be retrieved: the doubt is refused
+    assert res.status_code == 409 and res.json()["detail"] == "Upload this chapter to see this task."
 
 
 def test_blank_or_huge_text_is_refused(client, world):

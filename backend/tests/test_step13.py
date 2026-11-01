@@ -1,17 +1,21 @@
-"""Layer 3: chapter-title sequence (pipeline/structure.py)."""
+"""Layer 3: chapter-title sequence (pipeline/structure.py).
+
+Books are private to the student who uploaded them, so a book is only ever compared with official books and that
+student's own other books. (The teacher endpoint that used to serve these suggestions is gone; `structure.suggest` is
+the module under test.)"""
 import pytest
 
 from app.core.config import settings
 from app.models import Book, Chapter, ChapterStatus, Role
 from app.pipeline import structure
 from app.pipeline.structure import ordered_matches, title_overlap, title_words
-from tests.test_book_access import make_user, new_book
+from tests.test_book_access import make_user
 
 OFFICIAL = ["Exploration and Entering", "The Building Block of Life", "Matter in Our Surroundings", "Tissues"]
 
 
 def titles_book(db, titles, owner_id=None, status=ChapterStatus.READY, subject="S"):
-    book = Book(board="B", class_name="9", subject=subject, publisher="P", is_reference=owner_id is None, owner_teacher_id=owner_id)
+    book = Book(board="B", class_name="9", subject=subject, publisher="P", is_reference=owner_id is None, owner_student_id=owner_id)
     db.add(book)
     db.flush()
     for i, t in enumerate(titles, 1):
@@ -41,7 +45,7 @@ def test_book_level_suggestion_by_titles_before_any_page_is_processed(session_fa
     with session_factory() as db:
         titles_book(db, OFFICIAL)
         db.commit()
-    t = make_user(session_factory, Role.teacher, "teachera")[0]
+    t = make_user(session_factory, Role.student, "studenta")[0]
     with session_factory() as db:
         mine = titles_book(db, ["Exploration: Entering the World of Secondary Science", "The Building Block of Life", "Our own extra chapter"],
                            owner_id=t.id, status=ChapterStatus.EMPTY)  # nothing uploaded yet
@@ -51,7 +55,7 @@ def test_book_level_suggestion_by_titles_before_any_page_is_processed(session_fa
 
 
 def test_one_matching_title_or_a_low_share_is_not_enough(session_factory):
-    t = make_user(session_factory, Role.teacher, "teachera")[0]
+    t = make_user(session_factory, Role.student, "studenta")[0]
     with session_factory() as db:
         titles_book(db, OFFICIAL)
         one = titles_book(db, ["Tissues", "Something else", "Another"], owner_id=t.id)
@@ -62,9 +66,9 @@ def test_one_matching_title_or_a_low_share_is_not_enough(session_factory):
         assert structure.suggest(db, low, t.id) == []  # 2 of 5 = 0.4 < 0.5
 
 
-def test_other_teachers_books_are_not_compared_but_own_and_official_are(session_factory):
-    a = make_user(session_factory, Role.teacher, "teachera")[0]
-    b = make_user(session_factory, Role.teacher, "teacherb")[0]
+def test_other_students_books_are_not_compared_but_own_and_official_are(session_factory):
+    a = make_user(session_factory, Role.student, "studenta")[0]
+    b = make_user(session_factory, Role.student, "studentb")[0]
     with session_factory() as db:
         a_book = titles_book(db, OFFICIAL, owner_id=a.id)
         b_book = titles_book(db, OFFICIAL, owner_id=b.id)
@@ -75,7 +79,7 @@ def test_other_teachers_books_are_not_compared_but_own_and_official_are(session_
 
 
 def test_unprocessed_chapters_of_the_other_book_are_ignored_and_switch_off(session_factory, monkeypatch):
-    t = make_user(session_factory, Role.teacher, "teachera")[0]
+    t = make_user(session_factory, Role.student, "studenta")[0]
     with session_factory() as db:
         titles_book(db, OFFICIAL, status=ChapterStatus.PROCESSING)  # nothing finished yet
         mine = titles_book(db, OFFICIAL, owner_id=t.id)
@@ -84,23 +88,3 @@ def test_unprocessed_chapters_of_the_other_book_are_ignored_and_switch_off(sessi
         assert len(structure.suggest(db, mine, t.id)) == 1
         monkeypatch.setattr(settings, "structure_enabled", False)
         assert structure.suggest(db, mine, t.id) == []
-
-
-def test_route_returns_the_structure_suggestion_with_its_signal(client, session_factory):
-    t, th = make_user(session_factory, Role.teacher, "teachera")
-    with session_factory() as db:
-        ref = titles_book(db, OFFICIAL)
-        ref_id = str(ref.id)
-        db.commit()
-    book = new_book(client, th)
-    with session_factory() as db:
-        import uuid
-        for i, title in enumerate(["Exploration: Entering the World of Secondary Science", "The Building Block of Life"], 1):
-            db.add(Chapter(book_id=uuid.UUID(book["id"]), title=title, sequence_num=i))
-        db.commit()
-    res = client.get(f"/teacher/books/{book['id']}/variant-suggestions", headers=th)
-    assert res.status_code == 200, res.text
-    [s] = res.json()
-    assert s["book"]["id"] == ref_id and s["signal"] == "structure" and s["matched_chapters"] == 2 and s["matched_pages"] == 0
-    client.post(f"/teacher/books/{book['id']}/variant-of", json={"base_book_id": ref_id}, headers=th)
-    assert client.get(f"/teacher/books/{book['id']}/variant-suggestions", headers=th).json() == []  # confirmed: no longer suggested

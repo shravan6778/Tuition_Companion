@@ -168,6 +168,8 @@ def _link_or_create_assignment(
 
     if assignment_id is not None:
         assignment = assignment_service.get_teacher_assignment(db, teacher, assignment_id)
+        if assignment.level == AssignmentLevel.MANUAL:
+            raise HTTPException(422, "A quiz is built from a book, so it can't be attached to a manual homework task")
         if assignment.subject.casefold() != (book.subject or "").casefold():
             raise HTTPException(422, "The assignment belongs to a different subject")
         return assignment

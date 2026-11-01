@@ -21,15 +21,24 @@ def _seed_world(db):
     s1 = User(supertokens_user_id="st-s1-p4s2", name="Student 1", username="s1p4s2", phone="9200000003", role=Role.student, link_code="P4S2CD01")
     s2 = User(supertokens_user_id="st-s2-p4s2", name="Student 2", username="s2p4s2", phone="9200000004", role=Role.student, link_code="P4S2CD02")
     s3 = User(supertokens_user_id="st-s3-p4s2", name="Student 3", username="s3p4s2", phone="9200000005", role=Role.student, link_code="P4S2CD03")
-    db.add_all([t1, t2, s1, s2, s3])
+    # the owner of the private book: a student who is in nobody's room, so no teacher may see any of the book
+    owner = User(supertokens_user_id="st-own-p4s2", name="Owner", username="ownp4s2", phone="9200000006", role=Role.student, link_code="P4S2CD04")
+    db.add_all([t1, t2, s1, s2, s3, owner])
     db.flush()
 
     book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="NCERT", is_reference=True)
-    private_t2 = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Private", is_reference=False, owner_teacher_id=t2.id)
+    private_t2 = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Private", is_reference=False, owner_student_id=owner.id)
     db.add_all([book, private_t2])
     db.flush()
 
     ch = Chapter(book_id=book.id, title="Atoms and Molecules", sequence_num=1, status=ChapterStatus.READY)
+    # s1's own copy of the same chapter: a teacher's task resolves to each student's own book by subject + chapter title
+    s1_book = Book(board="CBSE", class_name="Class 9", subject="Science", publisher="Own copy", is_reference=False, owner_student_id=s1.id)
+    db.add(s1_book)
+    db.flush()
+    s1_ch = Chapter(book_id=s1_book.id, title="Atoms and Molecules", sequence_num=1, status=ChapterStatus.READY)
+    db.add(s1_ch)
+    db.flush()
     priv_ch = Chapter(book_id=private_t2.id, title="Secret Chapter", sequence_num=1, status=ChapterStatus.READY)
     db.add_all([ch, priv_ch])
     db.flush()
@@ -37,8 +46,9 @@ def _seed_world(db):
     p1 = Page(chapter_id=ch.id, page_number=1, content_text="Law of conservation of mass states that mass can neither be created nor destroyed in a chemical reaction.")
     p2 = Page(chapter_id=ch.id, page_number=2, content_text="Law of constant proportions states that in a chemical substance the elements are always present in definite proportions by mass.")
     p3 = Page(chapter_id=ch.id, page_number=3, content_text="An atom is the smallest particle of an element that retains its chemical properties, and molecules are groups of atoms.")
-    priv_p = Page(chapter_id=priv_ch.id, page_number=1, content_text="Private teacher 2 content on isotopes and isobars.")
-    db.add_all([p1, p2, p3, priv_p])
+    priv_p = Page(chapter_id=priv_ch.id, page_number=1, content_text="A private student book on isotopes and isobars.")
+    s1_p = Page(chapter_id=s1_ch.id, page_number=1, content_text="Law of conservation of mass states that mass can neither be created nor destroyed in a chemical reaction.")
+    db.add_all([p1, p2, p3, priv_p, s1_p])
     db.flush()
 
     c1 = Concept(page_id=p1.id, name="Conservation of Mass", description="Mass is conserved in reactions", name_key="conservation mass", is_canonical=True, position=0)
@@ -46,6 +56,8 @@ def _seed_world(db):
     c3 = Concept(page_id=p3.id, name="Atomic Theory", description="Atoms form molecules", name_key="atomic theory", is_canonical=True, position=0)
     priv_c = Concept(page_id=priv_p.id, name="Private Concept", description="Secret", name_key="private concept", is_canonical=True, position=0)
     db.add_all([c1, c2, c3, priv_c])
+    for c in (c1, c2, c3):  # the same concepts in s1's copy (matched by name)
+        db.add(Concept(page_id=s1_p.id, name=c.name, description=c.description, name_key=c.name_key, is_canonical=True, position=c.position))
     db.flush()
 
     db.add(ConceptEdge(chapter_id=ch.id, concept_id=c2.id, prerequisite_id=c1.id, source="llm"))
@@ -75,14 +87,13 @@ def test_teacher_generates_quiz_and_assigns_to_room_with_tenant_isolation(client
     t1, t2, s1, s2, s3 = w["t1"], w["t2"], w["s1"], w["s2"], w["s3"]
     book_id, ch_id = w["book_id"], w["ch_id"]
 
-    # T1 creates a room; S1 and S3 join T1's room, S1 links the book (S3 does not link the book)
+    # T1 creates a room; S1 and S3 join T1's room. S1 owns a copy of the chapter, S3 has none.
     room_res = client.post("/teacher/rooms", headers=t1, json={"name": "Class 9A", "room_type": "single_class"})
     assert room_res.status_code == 201
     room = room_res.json()
 
     _request_and_approve_room(client, room, s1, t1)
     _request_and_approve_room(client, room, s3, t1)
-    client.post(f"/student/books/{book_id}/link", headers=s1)
 
     # T1 generates a Short (10-question) chapter quiz and assigns it directly to the room
     gen = client.post(
@@ -112,7 +123,7 @@ def test_teacher_generates_quiz_and_assigns_to_room_with_tenant_isolation(client
         else:
             assert q["expected_answer"]
 
-    # Student S1 (in the room + book linked) sees the quiz in GET /student/quizzes
+    # Student S1 (in the room, owns the chapter) sees the quiz in GET /student/quizzes
     s1_list = client.get("/student/quizzes", headers=s1).json()
     assert [q["id"] for q in s1_list] == [quiz["id"]]
 
@@ -123,9 +134,12 @@ def test_teacher_generates_quiz_and_assigns_to_room_with_tenant_isolation(client
         assert q["expected_answer"] is None
         assert q["explanation"] is None
 
-    # Tenancy: S3 (same room, book NOT linked) and S2 (not in room) see nothing and get 404 on the quiz
-    assert client.get("/student/quizzes", headers=s3).json() == []
-    assert client.get(f"/student/quizzes/{quiz['id']}", headers=s3).status_code == 404
+    # S3 is in the room but has no copy of the chapter: the quiz is listed, opening it says to upload the chapter, and
+    # nothing of S1's private book is used for S3. S2 (not in the room) sees nothing and gets 404.
+    assert [q["id"] for q in client.get("/student/quizzes", headers=s3).json()] == [quiz["id"]]
+    s3_open = client.get(f"/student/quizzes/{quiz['id']}", headers=s3)
+    assert s3_open.status_code == 409 and s3_open.json()["detail"] == "Upload this chapter to see this task."
+    assert client.get("/student/quizzes", headers=s2).json() == []
     assert client.get(f"/student/quizzes/{quiz['id']}", headers=s2).status_code == 404
 
     # Tenancy: Teacher 2 gets 404 trying to view, assign, or delete Teacher 1's quiz

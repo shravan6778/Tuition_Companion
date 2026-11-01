@@ -1,4 +1,5 @@
-from app.models.assignment import Assignment, AssignmentConcept, AssignmentLevel
+from app.models.assignment import (Assignment, AssignmentConcept, AssignmentItem, AssignmentItemKind, AssignmentLevel,
+                                   ManualSubmission, SubmissionSource, Verdict)
 from app.models.base import Base
 from app.models.check import AssignmentCheck, CheckQuestion
 from app.models.content import (
@@ -18,10 +19,13 @@ __all__ = [
     "Assignment",
     "AssignmentCheck",
     "AssignmentConcept",
+    "AssignmentItem",
+    "AssignmentItemKind",
     "AssignmentLevel",
     "Base",
     "CheckQuestion",
     "Doubt",
+    "ManualSubmission",
     "MasteryEvent",
     "ParentStudentLink",
     "QuestionType",
@@ -35,7 +39,9 @@ __all__ = [
     "RoomMember",
     "RoomType",
     "SessionLog",
+    "SubmissionSource",
     "User",
+    "Verdict",
     "Book",
     "Chapter",
     "ChapterStatus",

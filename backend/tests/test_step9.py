@@ -18,8 +18,8 @@ from app.embeddings.vectors import cosine, from_bytes, to_bytes
 from app.graph_store import FAKE_STORE, get_graph_store
 from app.graph_store.base import ChapterGraph, ConceptNode, EdgeRow, GraphStoreError, PageNode
 from app.graph_store.fake_store import FakeGraphStore
-from app.graph_store.memgraph_store import CONCEPT_INDEX, PAGE_INDEX, MemgraphStore
-from app.models import Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, IndexStatus, Page
+from app.graph_store.memgraph_store import CONCEPT_INDEX, ITEM_INDEX, PAGE_INDEX, MemgraphStore
+from app.models import Book, Chapter, ChapterStatus, Concept, ConceptEdge, ContentEmbedding, IndexStatus, Page, PageItem
 from app.pipeline.indexing import build_chapter_payload, chapters_needing_index, embed_chapter, index_chapter
 from app.pipeline.jobs import mark_processing
 from tests.test_chapter_jobs import chapter_status, setup_chapter, upload
@@ -42,7 +42,7 @@ def provider(monkeypatch, indexing_on):
     return p
 
 
-def upload_ready(client, session_factory, *texts, tag="teachera"):
+def upload_ready(client, session_factory, *texts, tag="studenta"):
     th, book_id, ch = setup_chapter(client, session_factory, tag)
     assert upload(client, th, book_id, ch, _text_pdf(*texts)).status_code == 202
     assert chapter_status(client, th, book_id, ch)["status"] == "ready"
@@ -93,7 +93,10 @@ def test_upload_embeds_concepts_and_pages_and_writes_the_graph_copy(client, sess
         pages = db.scalars(select(Page).where(Page.chapter_id == row.id)).all()
         edges = db.scalars(select(ConceptEdge).where(ConceptEdge.chapter_id == row.id)).all()
         rows = db.scalars(select(ContentEmbedding).where(ContentEmbedding.chapter_id == row.id)).all()
-        assert len(rows) == len(canonical) + len(pages)
+        items = db.scalars(select(PageItem).join(Page, Page.id == PageItem.page_id).where(Page.chapter_id == row.id)).all()
+        assert items  # the pipeline now saves examples/exercises/figures (and concepts) as page items...
+        assert len(rows) == len(canonical) + len(pages) + len(items)  # ...and every one of them is embedded too
+        assert {r.item_id for r in rows if r.item_id} == {i.id for i in items}
         assert {r.model for r in rows} == {FAKE_EMBEDDING_MODEL} and {r.dim for r in rows} == {settings.embedding_dim}
 
         graph = FAKE_STORE.chapter(str(row.id))
@@ -270,7 +273,7 @@ def test_default_sync_only_touches_chapters_that_need_it(client, session_factory
 def test_prune_removes_graph_chapters_postgres_no_longer_has_as_ready(client, session_factory, provider):
     _, _, ch = upload_ready(client, session_factory, words("keep"))
     ghost = ChapterGraph(book_id=str(uuid.uuid4()), chapter_id=str(uuid.uuid4()), title="gone", sequence_num=1,
-                         is_reference=True, owner_teacher_id=None, embedding_model=None)
+                         is_reference=True, owner_student_id=None, embedding_model=None)
     FAKE_STORE.replace_chapter(ghost)
     lines = sync_all(session_factory, prune=True, allow_fake=True)
     assert FAKE_STORE.list_chapter_ids() == {ch} and any("pruned 1" in line for line in lines)
@@ -316,7 +319,7 @@ def test_search_only_sees_the_given_books():
     mine, theirs = str(uuid.uuid4()), str(uuid.uuid4())
     for book, name in ((mine, "mine"), (theirs, "theirs")):
         store.replace_chapter(ChapterGraph(
-            book_id=book, chapter_id=str(uuid.uuid4()), title="c", sequence_num=1, is_reference=False, owner_teacher_id=None,
+            book_id=book, chapter_id=str(uuid.uuid4()), title="c", sequence_num=1, is_reference=False, owner_student_id=None,
             embedding_model="m", concepts=[ConceptNode(str(uuid.uuid4()), name, "", 0, [1.0, 0.0])],
             pages=[PageNode(str(uuid.uuid4()), 1, [1.0, 0.0])]))
     assert [h.name for h in store.search_concepts([1.0, 0.0], [mine], k=5)] == ["mine"]
@@ -396,7 +399,7 @@ def sample_graph(n_concepts=3):
     concepts = [ConceptNode(str(uuid.uuid4()), f"c{i}", "d", i, [0.1] * 4) for i in range(n_concepts)]
     pages = [PageNode(str(uuid.uuid4()), 1, [0.2] * 4), PageNode(str(uuid.uuid4()), 2, None)]
     return ChapterGraph(
-        book_id="B", chapter_id="CH", title="T", sequence_num=2, is_reference=True, owner_teacher_id=None, embedding_model="m",
+        book_id="B", chapter_id="CH", title="T", sequence_num=2, is_reference=True, owner_student_id=None, embedding_model="m",
         pages=pages, concepts=concepts, edges=[EdgeRow(concepts[1].id, concepts[0].id, "llm")],
         concept_pages=[(concepts[0].id, pages[0].id)],
     )
@@ -408,9 +411,9 @@ def test_ensure_schema_creates_label_and_vector_indexes_once():
     s.ensure_schema()
     s.ensure_schema()
     statements = [q for q, _ in d.log]
-    assert sum(q.startswith("CREATE INDEX ON") for q in statements) == 5
+    assert sum(q.startswith("CREATE INDEX ON") for q in statements) == 7  # Chapter, Page x2, Concept x2, PageItem x2
     vector = [q for q in statements if q.startswith("CREATE VECTOR INDEX")]
-    assert len(vector) == 2 and CONCEPT_INDEX in vector[0] and PAGE_INDEX in vector[1]
+    assert len(vector) == 3 and CONCEPT_INDEX in vector[0] and PAGE_INDEX in vector[1] and ITEM_INDEX in vector[2]
     assert '"dimension": 4' in vector[0] and '"capacity": 500' in vector[0] and '"metric": "cos"' in vector[0]
     assert statements.count("SHOW VECTOR INDEX INFO") == 1  # second call was a no-op
 

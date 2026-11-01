@@ -81,6 +81,7 @@ class ItemHit:
     similarity: float
 
 
+@dataclass
 class ConceptHit:
     concept_id: str
     name: str

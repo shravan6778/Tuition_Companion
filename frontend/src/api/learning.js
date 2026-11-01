@@ -1,6 +1,6 @@
 // API calls for Phases 3-7: assignments, doubts, checks, quizzes, mastery, analytics, parent digest.
 // Every function resolves to the response body (null for 204).
-import api from "../shared/api";
+import api, { apiBlob } from "../shared/api";
 
 const body = (p) => p.then((r) => r.data);
 const qs = (params = {}) => {
@@ -14,6 +14,18 @@ export const startCheck = (assignmentId) => body(api.post(`/student/assignments/
 export const listChecks = () => body(api.get("/student/checks"));
 export const getCheck = (id) => body(api.get(`/student/checks/${id}`));
 export const submitCheck = (id, answers) => body(api.post(`/student/checks/${id}/submit`, { answers }));
+
+// ---- student: homework (manual tasks) ----
+// source "photo": `photo` is the image file (optional `text` note). source "voice": `text` is what the device heard.
+export const handInWork = (assignmentId, { source, text, photo }) => {
+  const fd = new FormData();
+  fd.append("source", source);
+  if (text) fd.append("text", text);
+  if (photo) fd.append("photo", photo);
+  return body(api.post(`/student/assignments/${assignmentId}/submissions`, fd));
+};
+export const mySubmissions = (assignmentId) => body(api.get(`/student/assignments/${assignmentId}/submissions`));
+export const submissionPhoto = (path) => apiBlob(path);
 
 // ---- student: doubts ----
 export const askDoubt = (payload) => body(api.post("/student/doubts", payload));
@@ -65,8 +77,14 @@ export const deleteRoom = (roomId, confirmName) => body(api.delete(`/teacher/roo
 export const listAssignments = (params) => body(api.get(`/teacher/assignments${qs(params)}`));
 export const createAssignment = (payload) => body(api.post("/teacher/assignments", payload));
 export const deleteAssignment = (id) => body(api.delete(`/teacher/assignments/${id}`));
+export const chapterOutline = (params) => body(api.get(`/teacher/assignments/outline${qs(params)}`));
 export const exerciseProposal = (payload) => body(api.post("/teacher/assignments/exercise-proposal", payload));
 export const assignmentDoubts = (id, studentId) => body(api.get(`/teacher/assignments/${id}/doubts${qs({ student_id: studentId })}`));
+
+// ---- teacher: homework (manual tasks) ----
+export const assignmentSubmissions = (id, studentId) => body(api.get(`/teacher/assignments/${id}/submissions${qs({ student_id: studentId })}`));
+export const reviewSubmission = (id, verdict, feedback) =>
+  body(api.post(`/teacher/submissions/${id}/review`, { verdict, feedback: feedback || undefined }));
 
 // ---- teacher: books ----
 export const listTeacherBooks = () => body(api.get("/teacher/books"));

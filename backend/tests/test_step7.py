@@ -15,7 +15,7 @@ from app.pipeline.orchestrator import PipelineOrchestrator
 from tests.test_book_access import make_user, new_book, new_chapter
 from tests.test_chapter_jobs import BrokenLLM, upload, use_llm
 from tests.test_pipeline import CountingLLM, _text_pdf
-from tests.test_step6 import TEXTS, make_room, pdf_with_outline, plan, post_front
+from tests.test_step6 import TEXTS, pdf_with_outline, plan, post_front
 
 
 # ---- rate limits --------------------------------------------------------------------------------
@@ -54,15 +54,33 @@ def test_parent_link_is_rate_limited(client, session_factory, monkeypatch):
     assert client.post("/parent/link", json={"link_code": "NOPE0000"}, headers=ph).status_code == 429
 
 
-def test_costly_upload_steps_are_rate_limited(client, session_factory, monkeypatch):
-    monkeypatch.setattr(settings, "rate_front_pages_per_hour", 2)
-    monkeypatch.setattr(settings, "rate_whole_book_plan_per_hour", 1)
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    assert post_front(client, th).status_code == 201 and post_front(client, th).status_code == 201
-    assert post_front(client, th).status_code == 429
-    book = new_book(client, th)
-    assert plan(client, th, book["id"], _text_pdf(*TEXTS)).status_code == 201
-    assert plan(client, th, book["id"], _text_pdf(*TEXTS)).status_code == 429
+def test_costly_upload_steps_are_rate_limited_per_student(client, session_factory, monkeypatch):
+    monkeypatch.setattr(settings, "rate_student_front_pages_per_hour", 2)
+    monkeypatch.setattr(settings, "rate_student_whole_book_plans_per_hour", 1)
+    monkeypatch.setattr(settings, "rate_student_book_creates_per_hour", 2)
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    _, other = make_user(session_factory, Role.student, "studentb")
+    assert post_front(client, sh).status_code == 201 and post_front(client, sh).status_code == 201
+    assert post_front(client, sh).status_code == 429
+    assert post_front(client, other).status_code == 201  # the limit is per student
+    book = new_book(client, sh)
+    assert plan(client, sh, book["id"], _text_pdf(*TEXTS)).status_code == 201
+    assert plan(client, sh, book["id"], _text_pdf(*TEXTS)).status_code == 429
+    new_book(client, sh)
+    body = {"board": "CBSE", "class_name": "Class 9", "subject": "Maths", "publisher": "P"}
+    assert client.post("/student/books", json=body, headers=sh).status_code == 429  # third book this hour
+    assert client.post("/student/books", json=body, headers=other).status_code == 201
+
+
+def test_chapter_uploads_are_rate_limited_per_student(client, session_factory, monkeypatch):
+    monkeypatch.setattr(settings, "rate_student_chapter_uploads_per_hour", 1)
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    book = new_book(client, sh)
+    first = new_chapter(client, sh, book["id"])
+    second = client.post(f"/student/books/{book['id']}/chapters", json={"title": "Ch 2", "sequence_num": 2}, headers=sh).json()["id"]
+    assert upload(client, sh, book["id"], first, _text_pdf("alpha idea")).status_code == 202
+    blocked = upload(client, sh, book["id"], second, _text_pdf("beta idea"))
+    assert blocked.status_code == 429 and "Retry-After" in blocked.headers
 
 
 # ---- needs_review ------------------------------------------------------------------------------------
@@ -79,16 +97,16 @@ def test_long_page_without_concepts_is_flagged_for_review_and_reported(client, s
             return '{"concepts":[{"name":"Matter","description":"d","learning_objectives":[],"prerequisites":[]}]}'
 
     use_llm(monkeypatch, OnlyEmptyForBlankPage())
-    _, th = make_user(session_factory, Role.teacher, "teachera")
-    book = new_book(client, th)
-    ch = new_chapter(client, th, book["id"])
-    assert upload(client, th, book["id"], ch, _text_pdf(LONG, "a short page about matter and nothing else here")).status_code == 202
+    _, sh = make_user(session_factory, Role.student, "studenta")
+    book = new_book(client, sh)
+    ch = new_chapter(client, sh, book["id"])
+    assert upload(client, sh, book["id"], ch, _text_pdf(LONG, "a short page about matter and nothing else here")).status_code == 202
 
-    pages = client.get(f"/teacher/books/{book['id']}/chapters/{ch}/pages", headers=th).json()
+    pages = client.get(f"/student/books/{book['id']}/chapters/{ch}/pages", headers=sh).json()
     long_page, short_page = pages
     assert long_page["needs_review"] is True and "no concepts" in long_page["review_note"].lower()
     assert short_page["needs_review"] is False and short_page["review_note"] is None and short_page["concepts"]
-    report = client.get(f"/teacher/books/{book['id']}/chapters/{ch}/graph", headers=th).json()["report"]
+    report = client.get(f"/student/books/{book['id']}/chapters/{ch}/graph", headers=sh).json()["report"]
     assert [r["page"] for r in report["review_pages"]] == [1] and report["concepts"] == 1  # graph facts survive
 
 
@@ -117,10 +135,10 @@ def stored(data: bytes) -> str:
 def test_cleanup_removes_only_old_drafts_and_unreferenced_files(session_factory):
     old_time = datetime.now(timezone.utc) - timedelta(days=10)
     with session_factory() as db:
-        teacher = User(supertokens_user_id="st-t", name="T", username="tt", phone="1", role=Role.teacher)
-        db.add(teacher)
+        student = User(supertokens_user_id="st-t", name="T", username="tt", phone="1", role=Role.student, link_code="CLEAN001")
+        db.add(student)
         db.flush()
-        book = Book(board="B", class_name="9", subject="S", publisher="P", owner_teacher_id=teacher.id)
+        book = Book(board="B", class_name="9", subject="S", publisher="P", is_reference=False, owner_student_id=student.id)
         db.add(book)
         db.flush()
         chapter = Chapter(book_id=book.id, title="C", sequence_num=1)
@@ -128,7 +146,7 @@ def test_cleanup_removes_only_old_drafts_and_unreferenced_files(session_factory)
 
         orphan_file, shared_file, fresh_file = stored(b"%PDF-1.4 orphan"), stored(b"%PDF-1.4 shared"), stored(b"%PDF-1.4 fresh")
         chapter.source_file = shared_file  # a chapter still uses this file
-        mk = lambda path, when: UploadDraft(teacher_id=teacher.id, kind="front_pages", source_file=path,
+        mk = lambda path, when: UploadDraft(student_id=student.id, kind="front_pages", source_file=path,
                                             source_sha256="0" * 64, page_count=1, created_at=when)
         db.add_all([mk(orphan_file, old_time), mk(shared_file, old_time), mk(fresh_file, datetime.now(timezone.utc))])
         db.commit()
@@ -159,7 +177,7 @@ def test_ingest_builds_a_public_read_only_reference_book_from_bookmarks(client, 
 
     with session_factory() as db:
         book = db.get(Book, uuid.UUID(book_id))
-        assert book.is_reference and book.owner_teacher_id is None and book.edition == "2025"
+        assert book.is_reference and book.owner_student_id is None and book.edition == "2025"
         chapters = db.scalars(select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.sequence_num)).all()
         assert [(c.title, c.status) for c in chapters] == [("Matter", "ready"), ("Atoms", "ready")]
         assert [len(c.pages) for c in chapters] == [3, 3]
@@ -168,7 +186,8 @@ def test_ingest_builds_a_public_read_only_reference_book_from_bookmarks(client, 
     _, th = make_user(session_factory, Role.teacher, "teachera")
     _, sh = make_user(session_factory, Role.student, "student1")
     assert book_id in [b["id"] for b in client.get("/teacher/books?scope=reference", headers=th).json()]
-    assert client.post(f"/teacher/books/{book_id}/chapters", json={"title": "x", "sequence_num": 9}, headers=th).status_code == 403
+    assert client.post(f"/teacher/books/{book_id}/chapters", json={"title": "x", "sequence_num": 9}, headers=th).status_code in (404, 405)  # teachers have no route to add chapters
+    assert client.post(f"/student/books/{book_id}/chapters", json={"title": "x", "sequence_num": 9}, headers=sh).status_code == 403  # nor can students: read-only
     assert client.post(f"/student/books/{book_id}/link", headers=sh).status_code == 200
     first_chapter = client.get(f"/student/books/{book_id}", headers=sh).json()["chapters"][0]["id"]
     assert client.get(f"/student/books/{book_id}/chapters/{first_chapter}/graph", headers=sh).status_code == 200

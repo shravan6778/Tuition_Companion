@@ -1,10 +1,10 @@
-"""Standalone "Ask a Doubt" browse (Phase 3 step 7): Subject -> Book -> Chapter over every book the student has linked.
-Only READY chapters are listed (students never see a chapter that is still processing or failed), and only books the
-student linked, so the list is exactly the set a doubt can be searched in. Read-only; no model or embedding call."""
+"""Standalone "Ask a Doubt" browse (Phase 3 step 7): Subject -> Book -> Chapter over every book the student can search:
+their own private books and the reference books they linked. Only READY chapters are listed (students never see a
+chapter that is still processing or failed), so the list is exactly the set a doubt can be searched in. Read-only; no model or embedding call."""
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Book, Chapter, ChapterStatus, User, student_book
@@ -39,8 +39,10 @@ def browse(db: Session, student: User) -> list[BrowseSubject]:
     """Subjects (case-insensitive, A-Z), each with the student's linked books and their ready chapters in book order.
     A book with no ready chapter is left out; so is a subject with no such book."""
     rows = db.execute(
-        select(Book, Chapter).join(student_book, student_book.c.book_id == Book.id).join(Chapter, Chapter.book_id == Book.id)
-        .where(student_book.c.student_id == student.id, Chapter.status == ChapterStatus.READY)
+        select(Book, Chapter).join(Chapter, Chapter.book_id == Book.id)
+        .where(or_(Book.owner_student_id == student.id,
+                   Book.id.in_(select(student_book.c.book_id).where(student_book.c.student_id == student.id))),
+               Chapter.status == ChapterStatus.READY)
         .order_by(Book.subject, Book.class_name, Book.id, Chapter.sequence_num, Chapter.id)
     ).all()
     subjects: dict[str, BrowseSubject] = {}

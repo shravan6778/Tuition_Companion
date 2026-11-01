@@ -23,13 +23,10 @@ MAX_REVIEW_REPORTED = 50
 def _render_pdf_page(pdf_bytes: bytes, page_number: int) -> bytes | None:
     """Render one PDF page for vision; only the generated description is persisted."""
     try:
-        try:
-            import pymupdf as fitz
-        except ImportError:
-            import fitz
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        import pymupdf  # PyMuPDF >= 1.24.3 (pinned in requirements.txt); the legacy `fitz` alias is not needed
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
         page = doc.load_page(max(0, page_number - 1))
-        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False)
         data = pix.tobytes("png")
         doc.close()
         return data

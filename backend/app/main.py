@@ -6,6 +6,7 @@ from supertokens_python.framework.fastapi import get_middleware
 
 from app.admin.routes import router as admin_router
 from app.assessment.routes import mastery_router, router as check_router
+from app.assignments import manual as manual_tasks
 from app.assignments.routes import student_router as assignment_student_router, teacher_router as assignment_teacher_router
 from app.auth.routes import router as auth_router
 from app.auth.supertokens_config import init_supertokens
@@ -58,6 +59,8 @@ app.include_router(admin_router)
 app.include_router(student_router)
 app.include_router(student_content_router)
 app.include_router(assignment_student_router)
+app.include_router(manual_tasks.teacher_router)
+app.include_router(manual_tasks.student_router)
 app.include_router(doubt_router)
 app.include_router(check_router)
 app.include_router(mastery_router)

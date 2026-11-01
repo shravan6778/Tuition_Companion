@@ -6,7 +6,9 @@ Decided in Phase 3 (Phases.md "Settled before building"):
               the student asked doubts about or scored weak on come first, then the rest in book order.
   * type    : multiple choice only (exactly 4 options, one correct), so grading is plain code (Rules.md §1), never a model.
   * source  : the question is written from the concept's description and the text of ITS OWN page (grounded), checked
-              against a schema, retried twice with a correction prompt like concept extraction.
+              against a schema, retried twice with a correction prompt like concept extraction. For an item-level
+              assignment the picked examples / questions / figures that test the concept are added as `focus`, so the
+              question is about what the teacher actually set, not about the whole page.
   * no leak : `student_view` has no key and no explanation; those are only revealed by `grade` after submission.
   * order   : the model tends to put the right answer first, so options are shuffled in code (seeded per question id)."""
 import json
@@ -93,10 +95,13 @@ def _strip_fences(raw: str) -> str:
 
 
 def generate_question(provider, concept_id: str, name: str, description: str, page_text: str,
-                      already_asked: Sequence[str] = (), seed: Optional[str] = None) -> Question:
+                      already_asked: Sequence[str] = (), seed: Optional[str] = None, focus: str = "") -> Question:
     """Raises CheckQuestionError after MAX_RETRIES failed corrections (the caller shows "couldn't generate this right
     now", never a blank question or a stale one)."""
     user = f"CHECK QUESTION\nCONCEPT: {name}\nDESCRIPTION: {description or ''}\nPAGE:\n{(page_text or '')[: settings.concept_max_chars]}"
+    if focus.strip():
+        user += ("\nASSIGNED ITEMS (the teacher set these; ask about the idea they practise, from the page above, and do "
+                 "not copy them or reveal their solutions):\n" + focus.strip()[: settings.concept_max_chars])
     if already_asked:
         user += "\nQUESTIONS ALREADY ASKED:\n" + "\n".join(f"- {q}" for q in already_asked)
     last_error = ""

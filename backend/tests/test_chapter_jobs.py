@@ -6,19 +6,19 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.models import Chapter, ChapterStatus, Page, Role
-from tests.test_book_access import join_room_of, make_user, new_book, new_chapter
+from tests.test_book_access import make_user, new_book, new_chapter
 from tests.test_pipeline import CountingLLM, _text_pdf
 
 
 def upload(client, headers, book_id, chapter_id, data, name="c.pdf"):
     return client.post(
-        f"/teacher/books/{book_id}/chapters/{chapter_id}/pages/upload",
+        f"/student/books/{book_id}/chapters/{chapter_id}/pages/upload",
         files={"file": (name, data, "application/pdf")}, headers=headers,
     )
 
 
 def chapter_status(client, headers, book_id, chapter_id) -> dict:
-    chapters = client.get(f"/teacher/books/{book_id}/chapters", headers=headers).json()
+    chapters = client.get(f"/student/books/{book_id}/chapters", headers=headers).json()
     return next(c for c in chapters if c["id"] == chapter_id)
 
 
@@ -27,8 +27,8 @@ def page_count(session_factory, chapter_id) -> int:
         return len(db.scalars(select(Page).where(Page.chapter_id == uuid.UUID(str(chapter_id)))).all())
 
 
-def setup_chapter(client, session_factory, tag="teachera"):
-    _, th = make_user(session_factory, Role.teacher, tag)
+def setup_chapter(client, session_factory, tag="studenta"):
+    _, th = make_user(session_factory, Role.student, tag)
     book = new_book(client, th)
     return th, book["id"], new_chapter(client, th, book["id"])
 
@@ -78,7 +78,7 @@ def test_retry_after_failure_uses_stored_file_and_succeeds(client, session_facto
     assert st["status"] == "failed" and "page 1" in st["error_message"]
 
     use_llm(monkeypatch, CountingLLM())  # the LLM recovers
-    res = client.post(f"/teacher/books/{book_id}/chapters/{ch}/retry", headers=th)
+    res = client.post(f"/student/books/{book_id}/chapters/{ch}/retry", headers=th)
     assert res.status_code == 202
     assert chapter_status(client, th, book_id, ch)["status"] == "ready"
     assert page_count(session_factory, ch) == 2
@@ -86,7 +86,7 @@ def test_retry_after_failure_uses_stored_file_and_succeeds(client, session_facto
 
 def test_retry_is_rejected_when_there_is_nothing_to_retry(client, session_factory):
     th, book_id, ch = setup_chapter(client, session_factory)
-    url = f"/teacher/books/{book_id}/chapters/{ch}/retry"
+    url = f"/student/books/{book_id}/chapters/{ch}/retry"
     assert client.post(url, headers=th).status_code == 409  # empty: no file yet
     upload(client, th, book_id, ch, _text_pdf("page one"))
     assert client.post(url, headers=th).status_code == 409  # already ready
@@ -132,7 +132,7 @@ def test_cannot_upload_or_retry_while_actively_processing(client, session_factor
     th, book_id, ch = setup_chapter(client, session_factory)
     set_processing(session_factory, ch, started_ago_min=1)
     assert upload(client, th, book_id, ch, _text_pdf("x")).status_code == 409
-    assert client.post(f"/teacher/books/{book_id}/chapters/{ch}/retry", headers=th).status_code == 409
+    assert client.post(f"/student/books/{book_id}/chapters/{ch}/retry", headers=th).status_code == 409
 
 
 def test_stuck_processing_chapter_can_be_replaced_after_timeout(client, session_factory):
@@ -150,34 +150,45 @@ def test_upload_validation(client, session_factory, monkeypatch):
     assert upload(client, th, book_id, ch, b"just some text, not a pdf", name="fake.pdf").status_code == 415
     assert upload(client, th, book_id, ch, b"%PDF-1.4 x", name="notes.txt").status_code == 202  # content decides, not name
     monkeypatch.setattr(settings, "max_upload_mb", 0)
-    th2, b2, c2 = setup_chapter(client, session_factory, tag="teacherb")
+    th2, b2, c2 = setup_chapter(client, session_factory, tag="studentb")
     assert upload(client, th2, b2, c2, b"%PDF-1.4 x").status_code == 413
     assert chapter_status(client, th2, b2, c2)["status"] == "empty"  # rejected uploads change nothing
 
 
-def test_other_teacher_cannot_retry_or_replace_pages(client, session_factory):
+def test_other_student_cannot_retry_or_replace_pages(client, session_factory):
     th, book_id, ch = setup_chapter(client, session_factory)
-    _, other = make_user(session_factory, Role.teacher, "teacherb")
-    assert client.post(f"/teacher/books/{book_id}/chapters/{ch}/retry", headers=other).status_code == 404
+    _, other = make_user(session_factory, Role.student, "studentb")
+    assert client.post(f"/student/books/{book_id}/chapters/{ch}/retry", headers=other).status_code == 404
     assert upload(client, other, book_id, ch, _text_pdf("x")).status_code == 404
 
 
-# ---- students only see finished chapters --------------------------------------------
+# ---- the owner only sees finished chapters ------------------------------------------
 
-def test_students_only_see_ready_chapters_and_their_pages(client, session_factory, monkeypatch):
-    th, book_id, ready_ch = setup_chapter(client, session_factory)
-    failed_ch = new_chapter(client, th, book_id)  # second chapter, same sequence is fine for this test
-    _, sh = make_user(session_factory, Role.student, "student1")
-    join_room_of(client, session_factory, th, sh)
-    client.post(f"/student/books/{book_id}/link", headers=sh)
+def test_owner_only_sees_ready_chapters_and_their_pages(client, session_factory, monkeypatch):
+    sh, book_id, ready_ch = setup_chapter(client, session_factory)
+    failed_ch = new_chapter(client, sh, book_id)  # second chapter, same sequence is fine for this test
 
-    upload(client, th, book_id, ready_ch, _text_pdf("good"))
+    upload(client, sh, book_id, ready_ch, _text_pdf("good"))
     use_llm(monkeypatch, BrokenLLM())
-    upload(client, th, book_id, failed_ch, _text_pdf("bad"))
+    upload(client, sh, book_id, failed_ch, _text_pdf("bad"))
 
+    # Nobody has to "link" a private book: the student owns it.
     book = client.get(f"/student/books/{book_id}", headers=sh).json()
     assert [c["id"] for c in book["chapters"]] == [ready_ch]
     assert client.get(f"/student/books/{book_id}/chapters/{ready_ch}/pages", headers=sh).status_code == 200
     assert client.get(f"/student/books/{book_id}/chapters/{failed_ch}/pages", headers=sh).status_code == 404
     mine = client.get("/student/books", headers=sh).json()
     assert [c["id"] for c in mine[0]["chapters"]] == [ready_ch]
+    # the owner's own status list still shows the failed one, so a retry is possible
+    assert {c["id"] for c in client.get(f"/student/books/{book_id}/chapters", headers=sh).json()} == {ready_ch, failed_ch}
+
+
+def test_another_student_never_sees_the_book_or_its_pages(client, session_factory):
+    sh, book_id, ch = setup_chapter(client, session_factory)
+    upload(client, sh, book_id, ch, _text_pdf("private page"))
+    _, other = make_user(session_factory, Role.student, "studentb")
+    assert client.get(f"/student/books/{book_id}", headers=other).status_code == 404
+    assert client.get(f"/student/books/{book_id}/chapters", headers=other).status_code == 404
+    assert client.get(f"/student/books/{book_id}/chapters/{ch}/pages", headers=other).status_code == 404
+    assert client.get(f"/student/books/{book_id}/chapters/{ch}/graph", headers=other).status_code == 404
+    assert client.get("/student/books", headers=other).json() == []

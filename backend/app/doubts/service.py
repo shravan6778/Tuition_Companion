@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -47,6 +48,8 @@ def assignment_scope(db: Session, student: User, assignment: Assignment) -> Scop
     book, chapter = assignment_service.resolve_student_target(db, student, assignment)
     if book is None:
         return Scope()
+    if assignment.level == AssignmentLevel.ITEMS and chapter is not None:
+        return items_scope(db, assignment, chapter)
     if chapter is not None:
         concepts = assignment_service.chapter_concepts(db, chapter.id)
     else:
@@ -58,6 +61,17 @@ def assignment_scope(db: Session, student: User, assignment: Assignment) -> Scop
         return scope_for_concepts(db, concepts)
     chapter_ids = {str(db.get(Page, c.page_id).chapter_id) for c in concepts}
     return Scope(chapter_ids=chapter_ids)
+
+
+def items_scope(db: Session, assignment: Assignment, chapter: Chapter) -> Scope:
+    """Item + page scope of an `items` assignment in this student's copy of the chapter: the picked items, the pages they
+    sit on, the concepts they test, and nothing else of the chapter."""
+    resolved = assignment_service.resolve_items(db, assignment, chapter)
+    scope = scope_for_concepts(db, resolved.concepts)
+    scope.chapter_ids.add(str(chapter.id))
+    scope.item_ids = {str(i.id) for i in resolved.items}
+    scope.page_ids |= {str(p) for p in resolved.page_ids}
+    return scope
 
 
 def chapter_scope(chapter: Chapter) -> Scope:

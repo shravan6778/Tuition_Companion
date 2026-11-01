@@ -60,7 +60,7 @@ def _label(i: int) -> str:
 
 
 def build_prompt(question: str, pages: Sequence[RetrievedPage], concepts: Sequence[ConceptHit],
-                 refresher: Sequence[tuple[str, str]]) -> str:
+                 refresher: Sequence[tuple[str, str]], items: Sequence[RetrievedItem] = ()) -> str:
     parts = ["TUTOR DOUBT", f"STUDENT DOUBT: {question}", "PAGES:"]
     for i, p in enumerate(pages):
         parts.append(f"[{_label(i)}] (chapter: {p.chapter_title}, page {p.page_number})\n{p.text[: settings.tutor_page_chars]}\n")
