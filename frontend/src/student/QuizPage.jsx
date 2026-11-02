@@ -4,11 +4,14 @@ import { getMyQuiz, submitQuiz } from "../api/learning";
 import Header from "../shared/Header";
 import { Async, ErrorNote, Pill, pct, useLoad, useSubmit } from "../shared/ui";
 import Results from "./Results";
+import AnswerBox from "./AnswerBox";
+import { answerPayload, answerReady, emptyAnswer } from "./answerState";
+import WrittenResult from "../shared/WrittenResult";
 
 const KEYS = ["A", "B", "C", "D"];
 const TYPE_LABEL = { recall: "Recall", application: "Application", cross_concept: "Connects two ideas" };
 
-// A teacher test or a practice quiz. Multiple choice is graded in code, short answers by the tutor model.
+// A teacher test or a practice quiz. Multiple choice is graded in code; short and long answers (typed or spoken) are marked against key points by the tutor model, as a suggestion a teacher can change.
 export default function QuizPage() {
   const { quizId } = useParams();
   const state = useLoad(() => getMyQuiz(quizId), [quizId]);
@@ -19,14 +22,15 @@ export default function QuizPage() {
 
   const quiz = graded || state.data;
   const ready = quiz?.questions.filter((q) => q.status === "ready") || [];
-  const answered = ready.filter((q) => (q.answer_format === "mcq" ? picked[q.id] != null : (typed[q.id] || "").trim())).length;
+  const answered = ready.filter((q) => (q.answer_format === "mcq" ? picked[q.id] != null : answerReady(typed[q.id]))).length;
+  const unconfirmed = ready.some((q) => q.answer_format !== "mcq" && typed[q.id]?.method === "voice" && typed[q.id].text.trim() && !typed[q.id].confirmed);
 
   const submit = () =>
     run(async () => {
       const answers = ready.map((q) =>
         q.answer_format === "mcq"
           ? { question_id: q.id, chosen_index: picked[q.id] ?? null }
-          : { question_id: q.id, answer_text: (typed[q.id] || "").trim() || null });
+          : answerPayload(q.id, typed[q.id]));
       setGraded(await submitQuiz(quizId, answers));
     });
 
@@ -75,21 +79,14 @@ export default function QuizPage() {
                             );
                           })
                         ) : submitted ? (
-                          <div className="stack">
-                            <div className="callout"><strong>Your answer:</strong> {q.answer_text || <em>left blank</em>}</div>
-                            {q.expected_answer && <div className="callout ok"><strong>Expected:</strong> {q.expected_answer}</div>}
-                          </div>
+                          <WrittenResult q={q} />
                         ) : (
-                          <>
-                            <label htmlFor={`a-${q.id}`} className="small">Your answer</label>
-                            <textarea id={`a-${q.id}`} className="input" maxLength={2000} value={typed[q.id] || ""}
-                              onChange={(e) => setTyped({ ...typed, [q.id]: e.target.value })} />
-                          </>
+                          <AnswerBox id={q.id} long={q.answer_format === "long_answer"} voiceAllowed={q.voice_allowed} value={typed[q.id] || emptyAnswer}
+                            onChange={(v) => setTyped({ ...typed, [q.id]: v })} />
                         )}
                         {submitted && (
                           <div className="stack mt">
-                            {q.answer_format !== "mcq" && q.score != null && <div><Pill kind={q.correct ? "ok" : "weak"}>{q.correct ? "Correct" : "Not quite"} · {pct(q.score)}</Pill></div>}
-                            {q.feedback && <div className="callout info">{q.feedback}</div>}
+                            {q.answer_format === "mcq" && q.feedback && <div className="callout info">{q.feedback}</div>}
                             {q.explanation && <div className="callout info"><strong>Why:</strong> {q.explanation}</div>}
                           </div>
                         )}
@@ -104,10 +101,11 @@ export default function QuizPage() {
                     <ErrorNote error={error} />
                     <div className="row">
                       <span className="small">{answered} of {ready.length} answered. Unanswered questions count as wrong.</span>
-                      <button className="btn" disabled={busy || !quiz.can_submit} onClick={submit}>
+                      <button className="btn" disabled={busy || !quiz.can_submit || unconfirmed} onClick={submit}>
                         {busy ? "Marking your answers..." : "Submit test"}
                       </button>
                     </div>
+                    {unconfirmed && <p className="small">Tick "I read this and it says what I meant" on your spoken answers first.</p>}
                     {!quiz.can_submit && <p className="small">This test can't be submitted yet, some questions are still being written.</p>}
                   </div>
                 )}

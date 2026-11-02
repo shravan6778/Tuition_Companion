@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.assessment import rubric
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.graph_store.base import GraphStoreError
@@ -46,12 +47,26 @@ MCQ_SYSTEM = (
 SHORT_SYSTEM = (
     "You are the Quiz Agent for a school textbook platform. Write ONE short-answer question (1-2 sentences for the student "
     "to answer) matching the requested QUESTION TYPE, using ONLY the textbook page(s) given. Reply with JSON only: "
-    '{"question":str,"expected_answer":str,"explanation":str}. '
+    '{"question":str,"expected_answer":str,"key_points":[{"point":str,"marks":int}],"explanation":str}. '
     "Rules: (1) For APPLICATION: ask the student to apply the concept to a specific situation or explain 'why/how' based on "
     "the page. (2) For CROSS_CONCEPT: ask how the primary concept and the related concept connect, depend on, or contrast "
     "with each other according to the pages. (3) For RECALL: ask the student to state the core idea in their own words. "
     "(4) 'expected_answer' (1-3 sentences) states the key points a full-credit student answer must contain, grounded only "
-    "in the page(s). (5) 'explanation' briefly explains the reasoning. Add no outside knowledge."
+    "in the page(s). (5) 'key_points' is the marking rubric: 1 to 4 separate ideas a full-credit answer must contain, each a short "
+    "English sentence taken from the page(s), each worth 1 to 3 marks (1 = a detail, 3 = the central idea), at most 6 marks in "
+    "total, no overlap between points. (6) 'explanation' briefly explains the reasoning. Add no outside knowledge."
+)
+
+LONG_SYSTEM = (
+    "You are the Quiz Agent for a school textbook platform. Write ONE long-answer question (the student answers in a paragraph "
+    "of several sentences) matching the requested QUESTION TYPE, using ONLY the textbook page(s) given. Reply with JSON only: "
+    '{"question":str,"expected_answer":str,"key_points":[{"point":str,"marks":int}],"explanation":str}. '
+    "Rules: (1) Ask the student to explain, compare, describe or reason ('Explain why...', 'Describe how...'), never to list a "
+    "single fact. (2) For CROSS_CONCEPT: the answer must connect BOTH the primary concept and the related concept. "
+    "(3) 'key_points' is the marking rubric: 3 to 8 separate ideas, each a short English sentence taken from the page(s), each "
+    "worth 1 to 3 marks (1 = a detail, 3 = a central idea), at most 15 marks in total, no overlap between points, and every "
+    "point something a student could reasonably be expected to say. (4) 'expected_answer' (2-5 sentences) is a model answer "
+    "that covers every key point. (5) 'explanation' briefly explains the reasoning. Add no outside knowledge."
 )
 
 
@@ -81,6 +96,7 @@ class McqQuizSchema(BaseModel):
 class ShortAnswerQuizSchema(BaseModel):
     question: str = Field(min_length=8, max_length=500)
     expected_answer: str = Field(min_length=5, max_length=600)
+    key_points: list[rubric.KeyPoint] = Field(min_length=1, max_length=4)
     explanation: str = Field(default="", max_length=500)
 
     @field_validator("question", "expected_answer")
@@ -90,6 +106,31 @@ class ShortAnswerQuizSchema(BaseModel):
         if len(cleaned) < 5:
             raise ValueError("field cannot be blank")
         return cleaned
+
+    @field_validator("key_points")
+    @classmethod
+    def _rubric(cls, points: list[rubric.KeyPoint]) -> list[rubric.KeyPoint]:
+        return rubric.check_rubric(points, "short_answer")
+
+
+class LongAnswerQuizSchema(BaseModel):
+    question: str = Field(min_length=8, max_length=600)
+    expected_answer: str = Field(min_length=20, max_length=1500)
+    key_points: list[rubric.KeyPoint] = Field(min_length=3, max_length=8)
+    explanation: str = Field(default="", max_length=500)
+
+    @field_validator("question", "expected_answer")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) < 8:
+            raise ValueError("field cannot be blank")
+        return cleaned
+
+    @field_validator("key_points")
+    @classmethod
+    def _rubric(cls, points: list[rubric.KeyPoint]) -> list[rubric.KeyPoint]:
+        return rubric.check_rubric(points, "long_answer")
 
 
 @dataclass
@@ -125,6 +166,7 @@ class GeneratedQuizQuestion:
     correct_index: Optional[int]
     expected_answer: Optional[str]
     explanation: str
+    key_points: Optional[list[dict]] = None  # short / long answers: the rubric [{"point","marks"}]
 
 
 def question_mix(total: int, can_cross: bool = True) -> tuple[int, int, int]:
@@ -317,6 +359,7 @@ def plan_quiz_questions(
     related_map: Optional[dict[uuid.UUID, list[uuid.UUID]]] = None,
     *,
     preserve_slots: bool = False,
+    no_long: Sequence[uuid.UUID] = (),
 ) -> list[PlannedQuizItem]:
     """Plans `total_questions` items across `concept_ids` with the 50/30/20 recall/application/cross_concept mix.
     When `preserve_slots=True` (used for weighted student practice quizzes), `concept_ids` already holds the exact
@@ -391,6 +434,26 @@ def plan_quiz_questions(
                 answer_format=fmt,
             )
         )
+    return apply_long_share(plan, total_questions, no_long)
+
+
+def apply_long_share(plan: list[PlannedQuizItem], total: int, no_long: Sequence[uuid.UUID] = ()) -> list[PlannedQuizItem]:
+    """Turns `round(total * QUIZ_LONG_SHARE)` questions into long answers. They come from the application and cross-concept
+    multiple-choice slots first (cross-concept before application), then from short-answer slots, but one short answer is always
+    kept so every kind of question still appears. Recall questions stay multiple choice. A question about a concept in `no_long`
+    (a maths-type subject) is never made long."""
+    n_long = round(total * settings.quiz_long_share)
+    if n_long <= 0:
+        return plan
+    blocked = set(no_long)
+    ok = [item for item in plan if item.concept_id not in blocked and item.question_type != QuestionType.RECALL]
+    mcq = [i for i in ok if i.answer_format == AnswerFormat.MCQ]
+    short = [i for i in ok if i.answer_format == AnswerFormat.SHORT_ANSWER]
+    total_short = sum(1 for i in plan if i.answer_format == AnswerFormat.SHORT_ANSWER)
+    cross_first = lambda items: [i for i in items if i.question_type == QuestionType.CROSS_CONCEPT] + [i for i in items if i.question_type != QuestionType.CROSS_CONCEPT]
+    order = cross_first(mcq) + cross_first(short)[: max(0, total_short - 1)]
+    for item in order[:n_long]:
+        item.answer_format = AnswerFormat.LONG_ANSWER
     return plan
 
 
@@ -441,7 +504,7 @@ def generate_quiz_question(
         raise QuizAgentError("Cannot generate a quiz question from an empty page.")
 
     user_prompt = _build_user_prompt(item, primary, related, already_asked)
-    system_prompt = MCQ_SYSTEM if item.answer_format == AnswerFormat.MCQ else SHORT_SYSTEM
+    system_prompt = {AnswerFormat.MCQ: MCQ_SYSTEM, AnswerFormat.LONG_ANSWER: LONG_SYSTEM}.get(item.answer_format, SHORT_SYSTEM)
     last_error = ""
 
     for attempt in range(MAX_RETRIES + 1):
@@ -469,17 +532,19 @@ def generate_quiz_question(
                     explanation=parsed.explanation.strip(),
                 )
             else:
-                parsed_sa = ShortAnswerQuizSchema.model_validate_json(cleaned)
+                is_long = item.answer_format == AnswerFormat.LONG_ANSWER
+                parsed_sa = (LongAnswerQuizSchema if is_long else ShortAnswerQuizSchema).model_validate_json(cleaned)
                 return GeneratedQuizQuestion(
                     concept_id=str(primary.concept_id),
                     related_concept_id=str(related.concept_id) if related else None,
                     question_type=item.question_type,
-                    answer_format=AnswerFormat.SHORT_ANSWER,
+                    answer_format=AnswerFormat.LONG_ANSWER if is_long else AnswerFormat.SHORT_ANSWER,
                     question=parsed_sa.question.strip(),
                     options=None,
                     correct_index=None,
                     expected_answer=parsed_sa.expected_answer.strip(),
                     explanation=parsed_sa.explanation.strip(),
+                    key_points=rubric.to_json(parsed_sa.key_points),
                 )
         except ValidationError as exc:
             last_error = "; ".join(e["msg"] for e in exc.errors())[:300]

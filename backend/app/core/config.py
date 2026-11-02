@@ -125,6 +125,31 @@ class Settings(BaseSettings):
     quiz_revision_share: float = 0.20
     quiz_short_answer_pass_score: float = 0.80  # LLM grader score >= this counts as correct for mastery
     rate_quizzes_per_hour: int = 10
+    # --- written and spoken answers (assessment/answers.py, speech/). Typing is the baseline; voice only fills the same answer box.
+    # Shares are fractions of a check's / quiz's questions. Each is rounded, a tiny check can round to zero, and maths-type subjects get no long answers.
+    check_short_share: float = 0.20  # checks: share of questions answered in a few sentences
+    check_long_share: float = 0.10  # checks: share answered at length (rubric of key points)
+    quiz_long_share: float = 0.10  # quizzes: share of questions turned into long answers (taken from the short-answer slots first)
+    long_answer_max_chars: int = 4000
+    short_answer_max_chars: int = 1500
+    # Subjects where answers are worked steps, symbols and diagrams, not sentences: no long answers and no voice (photo answers come later).
+    # Matched case-insensitively against whole words of the subject name; add your own (comma separated).
+    math_like_subjects: str = "math,maths,mathematics,arithmetic,algebra,geometry,trigonometry,calculus,statistics,गणित,గణితం"
+    speech_languages: str = "en-IN,hi-IN,te-IN"  # the mic's language list, in this order
+    speech_default_language: str = "en-IN"
+    # Where speech becomes text. "browser" = the student's own browser does it (free, no backend, the server never sees audio).
+    # "azure" = the server transcribes (Azure Speech free tier) and deletes the audio right after. "fake" = tests.
+    speech_provider: str = "browser"
+    # Languages routed to the server provider even while the default is "browser" (decided from the pilot, e.g. "te-IN").
+    speech_server_languages: str = ""
+    # Languages whose spoken answers are NOT graded until the teacher confirms the transcript ("confirm before grading").
+    speech_hold_languages: str = ""
+    speech_max_audio_mb: int = 5
+    speech_max_audio_seconds: int = 60  # Azure short-audio REST limit; a spoken answer is a few sentences
+    rate_speech_per_hour: int = 60  # server speech-to-text calls per student (browser mode never reaches the server)
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
+    pilot_max_key_term_error_rate: float = 0.15  # app.db.stt_pilot: a language above this is NOT ready for plain voice answers
     # --- Phase 5 & 6 (rolling-window mastery, trends, session logs, personalization briefing)
     mastery_rolling_window: int = 3  # number of most recent measured events (check/quiz) per concept
     mastery_rolling_weights: tuple[float, float, float] = (0.50, 0.30, 0.20)  # (latest, previous, oldest)

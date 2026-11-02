@@ -96,6 +96,12 @@ export const getTeacherQuiz = (id) => body(api.get(`/teacher/quizzes/${id}`));
 export const assignTeacherQuiz = (id, payload) => body(api.post(`/teacher/quizzes/${id}/assign`, payload));
 export const deleteTeacherQuiz = (id) => body(api.delete(`/teacher/quizzes/${id}`));
 
+// ---- teacher: written and spoken answers (transcript, input method, override) ----
+export const quizResponses = (id) => body(api.get(`/teacher/quizzes/${id}/responses`));
+export const assignmentChecks = (id, studentId) => body(api.get(`/teacher/assignments/${id}/checks${qs({ student_id: studentId })}`));
+export const overrideAnswer = (kind, id, payload) => body(api.post(`/teacher/${kind === "quiz" ? "quiz-responses" : "check-questions"}/${id}/override`, payload));
+export const confirmAnswer = (kind, id, transcript) => body(api.post(`/teacher/${kind === "quiz" ? "quiz-responses" : "check-questions"}/${id}/confirm`, { transcript: transcript || undefined }));
+
 // ---- teacher: per-student ----
 export const getTrends = (studentId, weeks) => body(api.get(`/teacher/students/${studentId}/trends${qs({ weeks })}`));
 export const getBriefing = (studentId, refresh) => body(api.get(`/teacher/students/${studentId}/briefing${refresh ? "?refresh=true" : ""}`));

@@ -1,0 +1,25 @@
+{
+  "note": "Key terms are STEMS: a transcript is counted right when it contains the stem (Telugu and Hindi add endings to words). Have a native speaker check the sentences before the pilot.",
+  "items": [
+    { "id": "photosynthesis",
+      "en-IN": { "text": "Plants make their food by photosynthesis using sunlight, water and carbon dioxide.", "terms": ["photosynthesis", "sunlight", "carbon dioxide"] },
+      "hi-IN": { "text": "पौधे सूर्य के प्रकाश, पानी और कार्बन डाइऑक्साइड से प्रकाश संश्लेषण द्वारा अपना भोजन बनाते हैं।", "terms": ["प्रकाश संश्लेषण", "कार्बन डाइऑक्साइड", "सूर्य"] },
+      "te-IN": { "text": "మొక్కలు సూర్యరశ్మి, నీరు మరియు కార్బన్ డయాక్సైడ్ ఉపయోగించి కిరణజన్య సంయోగక్రియ ద్వారా ఆహారం తయారు చేస్తాయి.", "terms": ["కిరణజన్య సంయోగక్రియ", "సూర్యరశ్మి", "కార్బన్ డయాక్సైడ్"] } },
+    { "id": "cell",
+      "en-IN": { "text": "The cell is the basic unit of life and the nucleus controls its activities.", "terms": ["cell", "nucleus", "basic unit"] },
+      "hi-IN": { "text": "कोशिका जीवन की मूल इकाई है और केंद्रक उसकी गतिविधियों को नियंत्रित करता है।", "terms": ["कोशिका", "केंद्रक", "मूल इकाई"] },
+      "te-IN": { "text": "కణం జీవానికి ప్రాథమిక ప్రమాణం మరియు కేంద్రకం దాని కార్యకలాపాలను నియంత్రిస్తుంది.", "terms": ["కణం", "కేంద్రక", "ప్రాథమిక"] } },
+    { "id": "force",
+      "en-IN": { "text": "Force is equal to mass multiplied by acceleration, which is Newton's second law of motion.", "terms": ["force", "mass", "acceleration"] },
+      "hi-IN": { "text": "बल द्रव्यमान और त्वरण के गुणनफल के बराबर होता है, यह न्यूटन का दूसरा गति नियम है।", "terms": ["बल", "द्रव्यमान", "त्वरण"] },
+      "te-IN": { "text": "బలం అనేది ద్రవ్యరాశి మరియు త్వరణాల లబ్ధానికి సమానం, ఇది న్యూటన్ రెండవ గమన నియమం.", "terms": ["బల", "ద్రవ్యరాశి", "త్వరణ"] } },
+    { "id": "acid-base",
+      "en-IN": { "text": "An acid turns blue litmus red and a base turns red litmus blue.", "terms": ["acid", "litmus", "base"] },
+      "hi-IN": { "text": "अम्ल नीले लिटमस को लाल कर देता है और क्षार लाल लिटमस को नीला कर देता है।", "terms": ["अम्ल", "लिटमस", "क्षार"] },
+      "te-IN": { "text": "ఆమ్లం నీలి లిట్మస్‌ను ఎరుపుగా మారుస్తుంది, క్షారం ఎరుపు లిట్మస్‌ను నీలంగా మారుస్తుంది.", "terms": ["ఆమ్ల", "లిట్మస్", "క్షార"] } },
+    { "id": "water-cycle",
+      "en-IN": { "text": "Water evaporates, forms clouds by condensation and returns as rain.", "terms": ["evaporates", "condensation", "rain"] },
+      "hi-IN": { "text": "पानी वाष्पीकरण से भाप बनता है, संघनन से बादल बनाता है और वर्षा के रूप में लौटता है।", "terms": ["वाष्पीकरण", "संघनन", "वर्षा"] },
+      "te-IN": { "text": "నీరు బాష్పీభవనం చెంది, సాంద్రీకరణ ద్వారా మేఘాలుగా మారి వర్షంగా తిరిగి వస్తుంది.", "terms": ["బాష్పీభవన", "సాంద్రీకరణ", "వర్ష"] } }
+  ]
+}

@@ -47,5 +47,8 @@ class MasteryEvent(Base):
     check_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("assignment_checks.id", ondelete="SET NULL"), nullable=True, index=True)
     quiz_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("quizzes.id", ondelete="SET NULL"), nullable=True, index=True)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # A teacher changed an AI-suggested mark, so the concept was re-measured: this event REPLACES the one it points at when the
+    # current state is read (the old row stays; nothing is updated or deleted).
+    corrects_event_id: Mapped[Optional[int]] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), ForeignKey("mastery_events.id", ondelete="SET NULL"), nullable=True)
     source_concept_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, ForeignKey("concepts.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

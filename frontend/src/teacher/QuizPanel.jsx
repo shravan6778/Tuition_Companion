@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { assignTeacherQuiz, deleteTeacherQuiz, generateTeacherQuiz, getTeacherQuiz, listRooms, listTeacherBooks, listTeacherQuizzes } from "../api/learning";
+import { assignTeacherQuiz, deleteTeacherQuiz, generateTeacherQuiz, getTeacherQuiz, listRooms, listTeacherBooks, listTeacherQuizzes, quizResponses } from "../api/learning";
 import { Async, Empty, ErrorNote, Pill, fmtDate, useLoad, useSubmit } from "../shared/ui";
+import AnswerReview from "./AnswerReview";
 import BookChapterSelect from "./BookChapterSelect";
 
 const KEYS = ["A", "B", "C", "D"];
@@ -20,7 +21,7 @@ function QuizViewer({ quizId }) {
                 <strong>Q{n + 1}</strong>
                 <span className="chip">{TYPE[q.question_type] || q.question_type}</span>
                 <span className="small">{q.concept_name}{q.related_concept_name ? ` + ${q.related_concept_name}` : ""}</span>
-                <span className="small">{q.answer_format === "mcq" ? "Multiple choice" : "Short answer"}</span>
+                <span className="small">{q.answer_format === "mcq" ? "Multiple choice" : q.answer_format === "long_answer" ? "Long answer" : "Short answer"}</span>
               </div>
               {q.status !== "ready" ? <div className="callout warn">{q.message}</div> : (
                 <>
@@ -31,6 +32,9 @@ function QuizViewer({ quizId }) {
                     </div>
                   ))}
                   {q.expected_answer && <div className="callout ok"><strong>Expected answer:</strong> {q.expected_answer}</div>}
+                  {q.rubric?.length > 0 && (
+                    <ul className="small" aria-label="Key points">{q.rubric.map((p, i) => <li key={i}>{p.point} ({p.marks} {p.marks === 1 ? "mark" : "marks"})</li>)}</ul>
+                  )}
                   {q.explanation && <p className="small mb0 mt">{q.explanation}</p>}
                 </>
               )}
@@ -76,6 +80,7 @@ export default function QuizPanel({ target = {} }) {
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [viewing, setViewing] = useState(null);
+  const [answers, setAnswers] = useState(null);
   const [assigning, setAssigning] = useState(null);
   const [made, setMade] = useState("");
   const { busy, error, run } = useSubmit();
@@ -134,12 +139,14 @@ export default function QuizPanel({ target = {} }) {
                         <div className="row gap-s">
                           {q.assignment_id ? <Pill kind="ready">Given out</Pill> : <Pill kind="insufficient_data">Not given out</Pill>}
                           <button className="btn secondary small-btn" aria-expanded={viewing === q.id} onClick={() => setViewing(viewing === q.id ? null : q.id)}>{viewing === q.id ? "Hide" : "View with answers"}</button>
+                          {q.assignment_id && <button className="btn secondary small-btn" aria-expanded={answers === q.id} onClick={() => setAnswers(answers === q.id ? null : q.id)}>Student answers</button>}
                           {!q.assignment_id && <button className="btn small-btn" onClick={() => setAssigning(assigning === q.id ? null : q.id)}>Give to a room</button>}
                           <button className="btn danger small-btn" onClick={() => window.confirm("Delete this test?") && run(async () => { await deleteTeacherQuiz(q.id); list.reload(); })}>Delete</button>
                         </div>
                       </div>
                       {assigning === q.id && <AssignControls quiz={q} rooms={rooms} onDone={() => { setAssigning(null); list.reload(); }} />}
                       {viewing === q.id && <QuizViewer quizId={q.id} />}
+                      {answers === q.id && <AnswerReview kind="quiz" load={() => quizResponses(q.id)} deps={[q.id]} />}
                     </div>
                   ))}
                 </div>

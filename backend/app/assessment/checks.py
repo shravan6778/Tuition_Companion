@@ -4,7 +4,9 @@ Decided in Phase 3 (Phases.md "Settled before building"):
   * size    : one question per concept, never fewer than CHECK_MIN_QUESTIONS and never more than CHECK_MAX_QUESTIONS.
               Fewer concepts than the floor -> several questions on the same concept; more than the ceiling -> concepts
               the student asked doubts about or scored weak on come first, then the rest in book order.
-  * type    : multiple choice only (exactly 4 options, one correct), so grading is plain code (Rules.md §1), never a model.
+  * type    : mostly multiple choice (exactly 4 options, one correct), graded in plain code (Rules.md §1), never a model. A configurable
+              share of the questions (CHECK_SHORT_SHARE, CHECK_LONG_SHARE) are written or spoken answers marked against a rubric of
+              key points; a maths-type subject gets no long answers (`plan_formats`).
   * source  : the question is written from the concept's description and the text of ITS OWN page (grounded), checked
               against a schema, retried twice with a correction prompt like concept extraction. For an item-level
               assignment the picked examples / questions / figures that test the concept are added as `focus`, so the
@@ -19,8 +21,10 @@ from typing import Optional, Sequence
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from app.assessment import rubric
 from app.core.config import settings
 from app.core.errors import ProcessingError
+from app.models import AnswerFormat
 
 MAX_RETRIES = 2
 
@@ -35,8 +39,42 @@ SYSTEM = (
 )
 
 
+WRITTEN_SYSTEM = (
+    "You write ONE {kind} comprehension question for a school student, about ONE concept, using only the textbook page given. "
+    "Reply with JSON only: "
+    '{{"question":str,"expected_answer":str,"key_points":[{{"point":str,"marks":int}}],"explanation":str}}. '
+    "{shape} 'key_points' is the marking rubric: {points} separate ideas a good answer contains, each a short English sentence "
+    "taken from the page, each worth 1 to 3 marks (1 = a detail, 3 = the central idea), at most {cap} marks in total, no overlap. "
+    "'expected_answer' is a model answer that covers every key point. 'explanation' is one or two sentences of reasoning. Test "
+    "understanding, not copying: do not quote the page's own sentence as the question. Add no outside knowledge. If a list of "
+    "questions already asked is given, ask about a different aspect."
+)
+_KIND = {
+    AnswerFormat.SHORT_ANSWER: ("short-answer", "The student answers in one or two sentences.", "1 to 4", rubric.SHORT_MAX_MARKS),
+    AnswerFormat.LONG_ANSWER: ("long-answer", "The student answers in a paragraph: ask them to explain, describe or compare.", "3 to 8", rubric.LONG_MAX_MARKS),
+}
+
+
 class CheckQuestionError(ProcessingError):
     pass
+
+
+class WrittenSchema(BaseModel):
+    question: str = Field(min_length=8, max_length=500)
+    expected_answer: str = Field(min_length=5, max_length=1500)
+    key_points: list[rubric.KeyPoint] = Field(min_length=1, max_length=8)
+    explanation: str = Field(default="", max_length=500)
+
+
+@dataclass
+class WrittenQuestion:
+    """A short or long question with its rubric. Server-side only until the check is submitted."""
+    concept_id: str
+    answer_format: str
+    question: str
+    expected_answer: str
+    key_points: list
+    explanation: str
 
 
 class McqSchema(BaseModel):
@@ -66,6 +104,26 @@ class Question:
     options: list[str]
     correct_index: int
     explanation: str
+
+
+def plan_formats(n: int, allow_long: bool = True) -> list[str]:
+    """The answer format of each of `n` questions: `round(n * CHECK_SHORT_SHARE)` short and `round(n * CHECK_LONG_SHARE)` long
+    answers, spread through the check (long ones towards the end), the rest multiple choice. A tiny check can round to no written
+    question at all. `allow_long=False` (a maths-type subject) turns the long ones into short ones. At least one question stays
+    multiple choice, so every check has some part that is marked in code."""
+    n_long = round(n * settings.check_long_share) if allow_long else 0
+    n_short = round(n * settings.check_short_share) + (0 if allow_long else round(n * settings.check_long_share))
+    while n_long + n_short > max(n - 1, 0):
+        if n_short > 0:
+            n_short -= 1
+        else:
+            n_long -= 1
+    formats = [AnswerFormat.MCQ] * n
+    total = n_long + n_short
+    slots = sorted({min(n - 1, int((k + 0.5) * n / total)) for k in range(total)}) if total else []
+    for rank, slot in enumerate(slots):
+        formats[slot] = AnswerFormat.SHORT_ANSWER if rank < n_short else AnswerFormat.LONG_ANSWER
+    return formats
 
 
 def question_count(n_concepts: int) -> int:
@@ -114,6 +172,32 @@ def generate_question(provider, concept_id: str, name: str, description: str, pa
             last_error = "; ".join(e["msg"] for e in exc.errors())[:300]
             continue
         return shuffle_options(Question(concept_id, parsed.question.strip(), parsed.options, parsed.correct_index, parsed.explanation.strip()), seed)
+    raise CheckQuestionError("Couldn't generate this check right now. Please try again in a moment.")
+
+
+def generate_written_question(provider, fmt: str, concept_id: str, name: str, description: str, page_text: str,
+                              already_asked: Sequence[str] = (), focus: str = "") -> WrittenQuestion:
+    """A short or long question with its key-point rubric, from the concept's own page. Validated, corrected twice, then
+    CheckQuestionError (the caller marks it failed: never a blank or stale question)."""
+    kind, shape, points, cap = _KIND[fmt]
+    system = WRITTEN_SYSTEM.format(kind=kind, shape=shape, points=points, cap=cap)
+    user = f"CHECK QUESTION ({fmt.upper()})\nCONCEPT: {name}\nDESCRIPTION: {description or ''}\nPAGE:\n{(page_text or '')[: settings.concept_max_chars]}"
+    if focus.strip():
+        user += ("\nASSIGNED ITEMS (the teacher set these; ask about the idea they practise, from the page above, and do "
+                 "not copy them or reveal their solutions):\n" + focus.strip()[: settings.concept_max_chars])
+    if already_asked:
+        user += "\nQUESTIONS ALREADY ASKED:\n" + "\n".join(f"- {q}" for q in already_asked)
+    last_error = ""
+    for attempt in range(MAX_RETRIES + 1):
+        prompt = user + (f"\n\nYour previous reply was invalid: {last_error}\nReturn valid JSON only, matching the schema exactly." if attempt else "")
+        raw = provider.complete_json(system, prompt)
+        try:
+            parsed = WrittenSchema.model_validate_json(_strip_fences(raw))
+            points_ok = rubric.check_rubric(parsed.key_points, fmt)
+        except (ValidationError, ValueError) as exc:
+            last_error = ("; ".join(e["msg"] for e in exc.errors()) if isinstance(exc, ValidationError) else str(exc))[:300]
+            continue
+        return WrittenQuestion(concept_id, fmt, parsed.question.strip(), parsed.expected_answer.strip(), rubric.to_json(points_ok), parsed.explanation.strip())
     raise CheckQuestionError("Couldn't generate this check right now. Please try again in a moment.")
 
 

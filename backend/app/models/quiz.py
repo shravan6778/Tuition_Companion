@@ -14,6 +14,7 @@ from typing import Optional
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .answers import WrittenAnswerMixin
 from .base import Base
 
 
@@ -31,6 +32,8 @@ class QuestionType:
 class AnswerFormat:
     MCQ = "mcq"
     SHORT_ANSWER = "short_answer"
+    LONG_ANSWER = "long_answer"  # a few sentences marked against a rubric of key points (marks per point)
+    WRITTEN = (SHORT_ANSWER, LONG_ANSWER)
 
 
 class Quiz(Base):
@@ -72,7 +75,7 @@ class QuizQuestion(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending','ready','failed')", name="ck_quiz_question_status"),
         CheckConstraint("question_type IN ('recall','application','cross_concept')", name="ck_quiz_question_type"),
-        CheckConstraint("answer_format IN ('mcq','short_answer')", name="ck_quiz_answer_format"),
+        CheckConstraint("answer_format IN ('mcq','short_answer','long_answer')", name="ck_quiz_answer_format"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -86,7 +89,10 @@ class QuizQuestion(Base):
     question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     options: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)  # 4 strings for mcq; None for short_answer
     correct_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0..3 for mcq; NEVER sent before submit
-    expected_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # rubric/key for short_answer; NEVER sent before submit
+    expected_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # model answer for short/long answers; NEVER sent before submit
+    # The rubric of a short or long answer: [{"point": str, "marks": int}, ...]. NEVER sent before submit. NULL on older short answers,
+    # which are still graded as one score against `expected_answer`.
+    key_points: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     quiz: Mapped[Quiz] = relationship(back_populates="questions")
@@ -95,10 +101,12 @@ class QuizQuestion(Base):
     )
 
 
-class QuizResponse(Base):
+class QuizResponse(WrittenAnswerMixin, Base):
     __tablename__ = "quiz_responses"
     __table_args__ = (
         CheckConstraint("score IS NULL OR (score >= 0 AND score <= 1)", name="ck_quiz_response_score_range"),
+        CheckConstraint("input_method IN ('typed','voice')", name="ck_quiz_response_input_method"),
+        CheckConstraint("score_source IS NULL OR score_source IN ('ai','teacher')", name="ck_quiz_response_score_source"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

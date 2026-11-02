@@ -7,7 +7,8 @@
     DELETE /teacher/quizzes/{id}              delete a teacher quiz
     GET    /student/quizzes                   list quizzes visible to this student (assigned teacher tests + own practice)
     GET    /student/quizzes/{id}              student view of a quiz (NEVER includes answer keys before submission)
-    POST   /student/quizzes/{id}/submit       hybrid grade (MCQ in code + short-answer via LLM) and update unified mastery
+    POST   /student/quizzes/{id}/submit       hybrid grade (MCQ in code; short and long answers by the LLM against their key points,
+                                              as a suggestion a teacher can override) and update unified mastery
     POST   /student/practice/generate         student self-triggered practice quiz weighted 60/20/20 toward weak/at-risk concepts"""
 import uuid
 from datetime import date, datetime
@@ -20,6 +21,8 @@ from sqlalchemy.orm import Session
 
 from app.assessment import mastery, quiz_service
 from app.assessment.routes import AtRiskOut, ConceptResultOut
+from app.assessment.subject_policy import policy_for
+from app.assessment.views import WrittenResultOut, fill_written
 from app.auth.dependencies import require_student, require_teacher
 from app.core.config import settings
 from app.core.ratelimit import limiter
@@ -53,7 +56,7 @@ class TeacherQuizAssignIn(BaseModel):
     due_date: Optional[date] = None
 
 
-class QuizQuestionOut(BaseModel):
+class QuizQuestionOut(WrittenResultOut):
     id: uuid.UUID
     position: int
     concept_id: Optional[uuid.UUID] = None
@@ -61,7 +64,7 @@ class QuizQuestionOut(BaseModel):
     related_concept_id: Optional[uuid.UUID] = None
     related_concept_name: Optional[str] = None
     question_type: str  # recall | application | cross_concept
-    answer_format: str  # mcq | short_answer
+    answer_format: str  # mcq | short_answer | long_answer
     status: str  # ready | pending | failed
     question: Optional[str] = None
     options: Optional[list[str]] = None
@@ -113,7 +116,10 @@ class QuizSummaryOut(BaseModel):
 class QuizAnswerIn(BaseModel):
     question_id: uuid.UUID
     chosen_index: Optional[int] = Field(default=None, ge=0, le=3)
-    answer_text: Optional[str] = Field(default=None, max_length=2000)
+    answer_text: Optional[str] = Field(default=None, max_length=6000)  # typed, or the spoken transcript the student reviewed
+    input_method: Literal["typed", "voice"] = "typed"
+    language: Optional[str] = Field(default=None, max_length=8)  # voice only: en-IN | hi-IN | te-IN
+    transcript_confirmed: bool = False  # voice only: the student's tick that they read the text and it says what they meant
 
 
 class QuizSubmitIn(BaseModel):
@@ -131,6 +137,7 @@ def _format_quiz_out(
         q.related_concept_id for q in quiz.questions if q.related_concept_id
     }
     names = {c.id: c.name for c in db.scalars(select(Concept).where(Concept.id.in_(cids)))} if cids else {}
+    subjects = quiz_service.concept_subjects(db, cids)
 
     resp_by_qid: dict[uuid.UUID, QuizResponse] = {}
     if student_id is not None:
@@ -153,6 +160,7 @@ def _format_quiz_out(
             related_concept_name=names.get(q.related_concept_id) if q.related_concept_id else None,
             question_type=q.question_type,
             answer_format=q.answer_format,
+            voice_allowed=q.answer_format != "mcq" and policy_for(subjects.get(q.concept_id)).voice_allowed,
             status=q.status,
         )
         if q.status == "ready":
@@ -163,6 +171,8 @@ def _format_quiz_out(
                 item.expected_answer = q.expected_answer
                 item.explanation = q.explanation
             resp = resp_by_qid.get(q.id)
+            if q.answer_format != "mcq":
+                fill_written(item, resp, q.key_points, q.expected_answer, reveal=show_keys)
             if resp is not None and show_keys:
                 item.chosen_index = resp.chosen_index
                 item.answer_text = resp.answer_text
@@ -179,8 +189,7 @@ def _format_quiz_out(
         if resp_by_qid:
             student_status = quiz_service.SUBMITTED
             scores = [r.score for r in resp_by_qid.values() if r.score is not None]
-            if scores:
-                student_score = round(sum(scores) / len(scores), 4)
+            student_score = round(sum(scores) / len(scores), 4) if scores else None  # nothing graded yet: a spoken answer waits for the teacher
         elif quiz.kind == "teacher":
             student_status = quiz_service.OPEN
             student_score = None
@@ -241,7 +250,7 @@ def _summary_out(db: Session, quiz: Quiz, student_id: Optional[uuid.UUID] = None
         if resps:
             status_val = quiz_service.SUBMITTED
             scores = [r.score for r in resps if r.score is not None]
-            score_val = round(sum(scores) / len(scores), 4) if scores else 0.0
+            score_val = round(sum(scores) / len(scores), 4) if scores else None
         else:
             status_val = quiz_service.OPEN
             score_val = None
@@ -331,6 +340,9 @@ def submit_student_quiz(
             question_id=a.question_id,
             chosen_index=a.chosen_index,
             answer_text=a.answer_text,
+            input_method=a.input_method,
+            language=a.language,
+            transcript_confirmed=a.transcript_confirmed,
         )
         for a in body.answers
     }

@@ -139,7 +139,18 @@ def current_state(db: Session, student_id: uuid.UUID, concept_ids: Optional[Iter
     state: dict[uuid.UUID, ConceptState] = {}
     measured_history: dict[uuid.UUID, list[tuple[str, float]]] = {}
     window_cap = max(1, settings.mastery_rolling_window)
+    # A teacher's re-mark of a written answer adds an event that REPLACES an earlier one (`corrects_event_id`). The replaced event
+    # and the at-risk flags that came from it are skipped here; the rows themselves stay in the log.
+    replaced = list(db.scalars(select(MasteryEvent.corrects_event_id).where(MasteryEvent.student_id == student_id, MasteryEvent.corrects_event_id.is_not(None))))
+    skip_ids: set[int] = set()
+    skip_flags: set[tuple] = set()
+    if replaced:
+        for old in db.execute(select(MasteryEvent.id, MasteryEvent.concept_id, MasteryEvent.check_id, MasteryEvent.quiz_id).where(MasteryEvent.id.in_(replaced))):
+            skip_ids.add(old.id)
+            skip_flags.add((old.concept_id, old.check_id, old.quiz_id))
     for e in db.scalars(query):
+        if e.id in skip_ids or (e.kind == PROPAGATED and (e.source_concept_id, e.check_id, e.quiz_id) in skip_flags):
+            continue
         s = state.get(e.concept_id)
         if s is None:
             s = state[e.concept_id] = ConceptState(e.concept_id, e.concept_name, OK)
@@ -185,7 +196,7 @@ def record_doubt(db: Session, student_id: uuid.UUID, concept_id: uuid.UUID, assi
 
 def record_check(db: Session, student_id: uuid.UUID, check_id: Optional[uuid.UUID], assignment_id: Optional[uuid.UUID],
                  results: dict[uuid.UUID, tuple[int, int]], *, kind: str = CHECK,
-                 quiz_id: Optional[uuid.UUID] = None) -> list[MasteryEvent]:
+                 quiz_id: Optional[uuid.UUID] = None, corrects: Optional[dict[uuid.UUID, int]] = None) -> list[MasteryEvent]:
     """results: concept -> (asked, correct). Adds the events and flushes; the CALLER commits (one transaction with the check/quiz)."""
     if kind not in MEASURED:
         raise ValueError(f"Unsupported measured event kind: {kind}")
@@ -198,7 +209,8 @@ def record_check(db: Session, student_id: uuid.UUID, check_id: Optional[uuid.UUI
         names[concept_id] = concept.name
         score = round(correct / asked, 4)
         added.append(MasteryEvent(student_id=student_id, concept_id=concept_id, concept_name=concept.name[:300], kind=kind, score=score,
-                                  asked=asked, correct=correct, assignment_id=assignment_id, check_id=check_id, quiz_id=quiz_id))
+                                  asked=asked, correct=correct, assignment_id=assignment_id, check_id=check_id, quiz_id=quiz_id,
+                                  corrects_event_id=(corrects or {}).get(concept_id)))
     db.add_all(added)
     db.flush()
 
@@ -227,3 +239,20 @@ def record_quiz(db: Session, student_id: uuid.UUID, quiz_id: uuid.UUID, assignme
                 results: dict[uuid.UUID, tuple[int, int]]) -> list[MasteryEvent]:
     """Same unified mastery log and weak-area propagation as `record_check`, recorded with `kind='quiz'`."""
     return record_check(db, student_id, None, assignment_id, results, kind=QUIZ, quiz_id=quiz_id)
+
+def record_correction(db: Session, student_id: uuid.UUID, assignment_id: Optional[uuid.UUID],
+                      results: dict[uuid.UUID, tuple[int, int]], *, check_id: Optional[uuid.UUID] = None,
+                      quiz_id: Optional[uuid.UUID] = None) -> list[MasteryEvent]:
+    """A teacher re-marked (or confirmed) a written answer: re-measure the affected concepts. `results` is the FULL asked/correct
+    of each concept over this check or quiz for this student. Each concept's earlier event from the same check/quiz is replaced
+    by the new one when the state is read (nothing is updated or deleted), and weak-concept flags are worked out again."""
+    column = MasteryEvent.check_id if check_id is not None else MasteryEvent.quiz_id
+    owner = check_id if check_id is not None else quiz_id
+    replaces: dict[uuid.UUID, int] = {}
+    already_replaced = set(db.scalars(select(MasteryEvent.corrects_event_id).where(MasteryEvent.student_id == student_id, MasteryEvent.corrects_event_id.is_not(None))))
+    for e in db.scalars(select(MasteryEvent).where(MasteryEvent.student_id == student_id, column == owner, MasteryEvent.kind.in_(MEASURED),
+                                                   MasteryEvent.concept_id.in_(list(results))).order_by(MasteryEvent.id)):
+        if e.id not in already_replaced:
+            replaces[e.concept_id] = e.id  # the newest of its kind that has not been replaced already
+    return record_check(db, student_id, check_id, assignment_id, results, kind=CHECK if check_id is not None else QUIZ,
+                        quiz_id=quiz_id, corrects=replaces)

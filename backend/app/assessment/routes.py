@@ -3,7 +3,8 @@
     POST /student/assignments/{id}/complete   open (or resume) the check; the questions come back WITHOUT their keys.
                                               A manual homework task gets no check: see assignments/manual.py
     GET  /student/checks/{id}                 resume an open check, or read a submitted one with its answers
-    POST /student/checks/{id}/submit          grade by code; the key and the explanations are revealed only here
+    POST /student/checks/{id}/submit          multiple choice graded by code, written/spoken answers marked against their key points by
+                                              the model (a suggestion); the key, rubric and explanations are revealed only here
     GET  /student/checks                      this student's checks, newest first"""
 import uuid
 from datetime import datetime
@@ -13,7 +14,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.assessment import service
+from app.assessment import answers as answer_rules, service
+from app.assessment.subject_policy import policy_for
+from app.assessment.views import WrittenResultOut, fill_written
 from app.assignments import manual, service as assignments
 from app.auth.dependencies import require_student
 from app.core.config import settings
@@ -28,7 +31,7 @@ mastery_router = APIRouter(prefix="/student/mastery", tags=["mastery"], dependen
 FAILED_MESSAGE = "We couldn't write this question right now."
 
 
-class QuestionOut(BaseModel):
+class QuestionOut(WrittenResultOut):
     id: uuid.UUID
     position: int
     concept_id: uuid.UUID | None
@@ -86,7 +89,11 @@ class CheckSummaryOut(BaseModel):
 
 class AnswerIn(BaseModel):
     question_id: uuid.UUID
-    chosen_index: int | None = Field(default=None, ge=0, le=3)
+    chosen_index: int | None = Field(default=None, ge=0, le=3)  # multiple choice
+    answer_text: str | None = Field(default=None, max_length=6000)  # short / long answers: typed, or the spoken transcript the student reviewed
+    input_method: str = Field(default="typed", pattern="^(typed|voice)$")
+    language: str | None = Field(default=None, max_length=8)  # voice only: en-IN | hi-IN | te-IN
+    transcript_confirmed: bool = False  # voice only: the student's tick that they read the text and it says what they meant
 
 
 class SubmitIn(BaseModel):
@@ -98,12 +105,15 @@ def _out(db: Session, check: AssignmentCheck) -> CheckOut:
     names = {c.id: c.name for c in db.scalars(select(Concept).where(Concept.id.in_(ids)))} if ids else {}
     revealed = check.status == service.SUBMITTED  # the ONLY time a key, explanation or choice leaves the server
     questions = []
+    voice_ok = policy_for(check.subject).voice_allowed
     for q in check.questions:
-        item = QuestionOut(id=q.id, position=q.position, concept_id=q.concept_id, concept_name=names.get(q.concept_id), status=q.status)
+        item = QuestionOut(id=q.id, position=q.position, concept_id=q.concept_id, concept_name=names.get(q.concept_id), status=q.status,
+                           answer_format=q.answer_format, voice_allowed=voice_ok and q.answer_format != "mcq")
         if q.status == "ready":
-            item.question, item.options = q.question, list(q.options)
+            item.question, item.options = q.question, (list(q.options) if q.options is not None else None)
             if revealed:
                 item.chosen_index, item.correct_index, item.correct, item.explanation = q.chosen_index, q.correct_index, q.correct, q.explanation
+                fill_written(item, q, q.key_points, q.expected_answer, reveal=q.answer_format != "mcq")
         else:
             item.message = FAILED_MESSAGE if q.status == "failed" else "This question is still being written."
         questions.append(item)
@@ -144,7 +154,9 @@ def get_check(check_id: uuid.UUID, student=Depends(require_student), db: Session
 @router.post("/checks/{check_id}/submit", response_model=CheckOut)
 def submit_check(check_id: uuid.UUID, body: SubmitIn, student=Depends(require_student), db: Session = Depends(get_db)):
     check = service.get_student_check(db, student, check_id)
-    return _out(db, service.submit(db, check, {a.question_id: a.chosen_index for a in body.answers}))
+    answers = {a.question_id: answer_rules.AnswerInput(chosen_index=a.chosen_index, answer_text=a.answer_text, input_method=a.input_method,
+                                                       language=a.language, transcript_confirmed=a.transcript_confirmed) for a in body.answers}
+    return _out(db, service.submit(db, check, answers))
 
 
 # ---- the student's mastery picture (built from the append-only log) -------------------------------------------

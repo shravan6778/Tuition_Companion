@@ -16,6 +16,7 @@ import TeacherDashboard from "./teacher/TeacherDashboard.jsx";
 import RoomDetail from "./teacher/RoomDetail.jsx";
 import StudentHub from "./teacher/StudentHub.jsx";
 import TestsPage from "./teacher/TestsPage.jsx";
+import SpeechPilot from "./teacher/SpeechPilot.jsx";
 
 // Phase 2 content library
 import TeacherLibrary from "./teacher/TeacherLibrary.jsx";
@@ -42,6 +43,7 @@ export default function App() {
         element={guard("teacher", <StudentHub />)}
       />
       <Route path="/teacher/tests" element={guard("teacher", <TestsPage />)} />
+      <Route path="/teacher/speech-pilot" element={guard("teacher", <SpeechPilot />)} />
       <Route
         path="/teacher/library"
         element={guard("teacher", <TeacherLibrary />)}

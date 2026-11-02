@@ -5,7 +5,10 @@
              concepts the student asked doubts about come first when there are more concepts than the ceiling allows.
   * source : each question is written from its concept's own page (`generate_question`, validated, retried twice).
   * no leak: the student gets `student_view` only. The key, the explanation and what the student chose are shown only
-             after `submit`, which grades in code (never a model).
+             after `submit`. Multiple choice is graded in code; a written or spoken answer is marked by the model against its
+             rubric of key points and labelled a SUGGESTION until a teacher has looked (assessment/answers.py).
+  * answers: a share of the questions are short or long written answers (checks.plan_formats); typing is the baseline and a
+             spoken answer is the same text after the student reviewed it. Maths-type subjects get no long and no spoken answers.
   * failure: a question the model never wrote validly is `failed` ("couldn't generate this right now": never blank or
              stale). Calling `start_check` again retries the failed / unfinished ones. A check can be submitted once at
              least CHECK_MIN_QUESTIONS (or all, if fewer were planned) questions exist; failed ones are not graded.
@@ -20,12 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.assessment import checks, mastery
+from app.assessment import answers as answer_rules, checks, mastery
+from app.assessment.subject_policy import policy_for
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.assignments import service as assignment_service
 from app.llm import get_llm_provider
-from app.models import Assignment, AssignmentCheck, AssignmentLevel, CheckQuestion, Concept, Page, User
+from app.models import AnswerFormat, Assignment, AssignmentCheck, AssignmentLevel, CheckQuestion, Concept, Page, User
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,11 @@ def _write(db: Session, llm, q: CheckQuestion, already: list[str], focus: str = 
         q.status = "failed"
         return
     try:
+        if q.answer_format in AnswerFormat.WRITTEN:
+            w = checks.generate_written_question(llm, q.answer_format, str(concept.id), concept.name, concept.description or "",
+                                                 page.content_text, already_asked=already, focus=focus)
+            q.question, q.expected_answer, q.key_points, q.explanation, q.status = w.question, w.expected_answer, w.key_points, w.explanation, "ready"
+            return
         made = checks.generate_question(llm, str(concept.id), concept.name, concept.description or "", page.content_text,
                                         already_asked=already, seed=str(q.id), focus=focus)
     except (ProcessingError, RuntimeError):
@@ -141,8 +150,10 @@ def start_check(db: Session, student: User, assignment: Assignment) -> Assignmen
     plan = checks.plan_check(concept_ids, priority_ids=_ask_first(db, student, [c.id for c in available]))
     if not plan:
         raise HTTPException(409, "This assignment has no concepts to check yet")
-    check = AssignmentCheck(student_id=student.id, assignment_id=assignment.id, assignment_title=assignment.title, status=OPEN)
-    check.questions = [CheckQuestion(position=i, concept_id=uuid.UUID(cid), status="pending") for i, cid in enumerate(plan)]
+    check = AssignmentCheck(student_id=student.id, assignment_id=assignment.id, assignment_title=assignment.title, status=OPEN,
+                            subject=assignment.subject)
+    formats = checks.plan_formats(len(plan), allow_long=policy_for(assignment.subject).long_allowed)
+    check.questions = [CheckQuestion(position=i, concept_id=uuid.UUID(cid), answer_format=formats[i], status="pending") for i, cid in enumerate(plan)]
     db.add(check)
     try:
         db.commit()  # claims the one open slot before any model call is paid for
@@ -159,8 +170,31 @@ def can_submit(check: AssignmentCheck) -> bool:
     return not any(q.status == "pending" for q in check.questions) and ready >= min(settings.check_min_questions, len(check.questions))
 
 
-def submit(db: Session, check: AssignmentCheck, answers: dict[uuid.UUID, Optional[int]]) -> AssignmentCheck:
-    """Grade by code and reveal. A question left out of `answers` is wrong. Once only."""
+def voice_allowed(check: AssignmentCheck) -> bool:
+    return policy_for(check.subject).voice_allowed
+
+
+def tally(check: AssignmentCheck) -> dict[uuid.UUID, tuple[int, int]]:
+    """concept -> (asked, correct) over the graded questions. A spoken answer waiting for the teacher is not counted yet."""
+    t = answer_rules.ConceptTally()
+    for q in check.questions:
+        if q.status == "ready" and q.correct is not None:
+            t.add(q.concept_id, q.correct)
+    return t.per_concept
+
+
+def overall_score(check: AssignmentCheck) -> Optional[float]:
+    """Mean of the graded questions' scores (a multiple-choice question is 1 or 0, a written one 0..1). None while nothing is graded."""
+    scored = [(1.0 if q.correct else 0.0) if q.answer_format == AnswerFormat.MCQ else q.score for q in check.questions
+              if q.status == "ready" and (q.answer_format == AnswerFormat.MCQ or q.score is not None)]
+    return round(sum(scored) / len(scored), 4) if scored else None
+
+
+def submit(db: Session, check: AssignmentCheck, answers: dict[uuid.UUID, "Optional[int] | answer_rules.AnswerInput"]) -> AssignmentCheck:
+    """Grade and reveal. A question left out of `answers` is wrong. Once only.
+
+    Multiple choice is graded by code; a written or spoken answer is marked by the model against its key points (a SUGGESTION).
+    A bare int in `answers` is a multiple-choice choice (kept so older callers still work)."""
     if check.status != OPEN:
         raise HTTPException(409, "This check was already submitted")
     if not can_submit(check):
@@ -169,26 +203,38 @@ def submit(db: Session, check: AssignmentCheck, answers: dict[uuid.UUID, Optiona
     unknown = [a for a in answers if a not in by_id or by_id[a].status != "ready"]
     if unknown:
         raise HTTPException(422, "An answer doesn't match a question of this check")
-    graded = []
-    for q in check.questions:
-        if q.status != "ready":
-            continue
-        g = checks.grade(checks.Question(str(q.concept_id), q.question, list(q.options), q.correct_index, q.explanation), answers.get(q.id))
-        q.chosen_index = answers.get(q.id) if isinstance(answers.get(q.id), int) and not isinstance(answers.get(q.id), bool) else None
-        q.correct = g.correct
-        graded.append(g)
-    check.score = round(sum(1 for g in graded if g.correct) / len(graded), 4)
+    given = {qid: (a if isinstance(a, answer_rules.AnswerInput) else answer_rules.AnswerInput(chosen_index=a)) for qid, a in answers.items()}
+    cleaned = {q.id: answer_rules.validate(q.answer_format, given.get(q.id, answer_rules.AnswerInput()), voice_allowed=voice_allowed(check))
+               for q in check.questions if q.status == "ready"}  # every 422 happens before the first model call is paid for
+    llm = _llm() if any(q.answer_format in AnswerFormat.WRITTEN and (cleaned[q.id].answer_text and not answer_rules.is_held(cleaned[q.id])) for q in check.questions if q.status == "ready") else None
+    names = {c.id: c.name for c in db.scalars(select(Concept).where(Concept.id.in_([q.concept_id for q in check.questions if q.concept_id])))}
+    try:
+        _grade_all(check, cleaned, llm, names)
+    except HTTPException:
+        db.rollback()  # a model that fails half way leaves nothing half graded
+        raise
+    check.score = overall_score(check)
     check.status, check.submitted_at = SUBMITTED, datetime.now(timezone.utc)
-    per_concept: dict[uuid.UUID, tuple[int, int]] = {}
-    for q in check.questions:
-        if q.status == "ready" and q.concept_id is not None:
-            asked, right = per_concept.get(q.concept_id, (0, 0))
-            per_concept[q.concept_id] = (asked + 1, right + (1 if q.correct else 0))
     try:  # the graded check and its mastery events are ONE transaction: a half-written result never reaches the mastery log
-        mastery.record_check(db, check.student_id, check.id, check.assignment_id, per_concept)
+        mastery.record_check(db, check.student_id, check.id, check.assignment_id, tally(check))
         db.commit()
     except Exception:
         db.rollback()
         raise
     db.refresh(check)
     return check
+
+
+def _grade_all(check: AssignmentCheck, cleaned: dict, llm, names: dict) -> None:
+    for q in check.questions:
+        if q.status != "ready":
+            continue
+        inp = cleaned[q.id]
+        if q.answer_format == AnswerFormat.MCQ:
+            g = checks.grade(checks.Question(str(q.concept_id), q.question, list(q.options), q.correct_index, q.explanation), inp.chosen_index)
+            q.chosen_index = inp.chosen_index if isinstance(inp.chosen_index, int) and not isinstance(inp.chosen_index, bool) else None
+            q.correct = g.correct
+        else:
+            out = answer_rules.grade_input(llm, inp, question=q.question, key_points=q.key_points, expected_answer=q.expected_answer,
+                                           concept_name=names.get(q.concept_id, ""), fmt=q.answer_format)
+            answer_rules.apply(q, inp, out)

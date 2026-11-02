@@ -19,6 +19,8 @@ from app.student.routes import router as student_router
 from app.student.content_routes import router as student_content_router
 from app.teacher.routes import router as teacher_router
 from app.assessment.quiz_routes import student_practice_router, student_quiz_router, teacher_quiz_router
+from app.assessment.review import router as review_router
+from app.speech.routes import router as speech_router
 from app.teacher import routes as teacher_routes
 from app.teacher import student_routes as teacher_student_routes
 
@@ -67,4 +69,6 @@ app.include_router(mastery_router)
 app.include_router(teacher_quiz_router)
 app.include_router(student_quiz_router)
 app.include_router(student_practice_router)
+app.include_router(review_router)
+app.include_router(speech_router)
 app.include_router(parent_router)

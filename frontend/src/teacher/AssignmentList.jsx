@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { assignmentDoubts, deleteAssignment, listAssignments } from "../api/learning";
+import { assignmentChecks, assignmentDoubts, deleteAssignment, listAssignments } from "../api/learning";
 import { Async, Empty, ErrorNote, Pill, fmtDate, fmtDateTime, isOverdue, useLoad, useSubmit } from "../shared/ui";
+import AnswerReview from "./AnswerReview";
 import SubmissionReview from "./SubmissionReview";
 
 const LEVEL = { subject: "Whole book", chapter: "Chapter", concept: "Ideas", exercise: "Exercise", items: "Picked items", manual: "Homework" };
@@ -37,6 +38,7 @@ function Doubts({ assignmentId, studentId }) {
 export default function AssignmentList({ roomId, studentId, refreshKey = 0 }) {
   const state = useLoad(() => listAssignments(roomId ? { room_id: roomId } : { student_id: studentId }), [roomId, studentId, refreshKey]);
   const [open, setOpen] = useState(null);
+  const [checksOpen, setChecksOpen] = useState(null);
   const { error, run } = useSubmit();
 
   return (
@@ -70,11 +72,15 @@ export default function AssignmentList({ roomId, studentId, refreshKey = 0 }) {
                 <button className="btn secondary small-btn" aria-expanded={open === a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>
                   {a.level === "manual" ? "Review work" : "Doubt"}
                 </button>
+                {a.level !== "manual" && (
+                  <button className="btn secondary small-btn" aria-expanded={checksOpen === a.id} onClick={() => setChecksOpen(checksOpen === a.id ? null : a.id)}>Check answers</button>
+                )}
                 <button className="btn danger small-btn"
                   onClick={() => window.confirm("Delete this assignment? Students keep their own doubt and check history.") && run(async () => { await deleteAssignment(a.id); state.reload(); })}>
                   Delete
                 </button>
               </div>
+              {checksOpen === a.id && <AnswerReview kind="check" load={() => assignmentChecks(a.id, studentId)} deps={[a.id, studentId]} />}
               {open === a.id && (a.level === "manual"
                 ? <SubmissionReview assignmentId={a.id} studentId={studentId} onChanged={state.reload} />
                 : <Doubts assignmentId={a.id} studentId={studentId} />)}

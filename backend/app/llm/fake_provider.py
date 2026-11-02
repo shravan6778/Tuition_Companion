@@ -58,6 +58,12 @@ class FakeLLMProvider:
             return self._quiz_mcq(user)
         if user.startswith("QUIZ QUESTION (SHORT_ANSWER)"):
             return self._quiz_short_answer(user)
+        if user.startswith("QUIZ QUESTION (LONG_ANSWER)"):
+            return self._quiz_short_answer(user, long=True)
+        if user.startswith("RUBRIC GRADING\n"):
+            return self._grade_rubric(user)
+        if user.startswith("CHECK QUESTION (SHORT_ANSWER)\n") or user.startswith("CHECK QUESTION (LONG_ANSWER)\n"):
+            return self._check_written(user)
         if user.startswith("SHORT ANSWER GRADING\n"):
             return self._grade_short_answer(user)
         if user.startswith("CHECK QUESTION\n"):  # one multiple-choice question about one concept
@@ -162,7 +168,36 @@ class FakeLLMProvider:
             "explanation": f"The page explains {name} as: {right}.",
         })
 
-    def _quiz_short_answer(self, user: str) -> str:
+    @staticmethod
+    def _rubric_for(name: str, desc: str, long: bool) -> list[dict]:
+        base = [{"point": f"{name} is described in the text", "marks": 2}, {"point": f"{desc or name} is the central idea", "marks": 1}]
+        if long:
+            base += [{"point": f"{name} has an effect the text explains", "marks": 2}, {"point": f"An example of {name} is given", "marks": 1}]
+        return base
+
+    def _check_written(self, user: str) -> str:
+        long = user.startswith("CHECK QUESTION (LONG_ANSWER)")
+        name = (re.search(r"^CONCEPT: (.+)$", user, flags=re.MULTILINE) or [None, "the idea"])[1].strip()
+        desc = (re.search(r"^DESCRIPTION: (.*)$", user, flags=re.MULTILINE) or [None, ""])[1].strip()
+        return json.dumps({
+            "question": (f"Explain {name} in a paragraph, using what the page says." if long else f"In a sentence or two, what is {name}?"),
+            "expected_answer": f"{name}: {desc or 'as described in the text'}. It is described in the text and has an effect the text explains.",
+            "key_points": self._rubric_for(name, desc, long),
+            "explanation": f"The text describes {name}.",
+        })
+
+    def _grade_rubric(self, user: str) -> str:
+        """Hits the points whose key words (4+ letters) appear in the student's answer; 'idk' or an empty match hits nothing."""
+        rubric_lines = re.findall(r"^(\d+)\. \(\d+ marks?\) (.+)$", user, flags=re.MULTILINE)
+        answer = user.split("STUDENT ANSWER:", 1)[-1].lower()
+        hit, missed = [], []
+        for idx, text in rubric_lines:
+            words = [w for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in {"that", "this", "with", "from", "described", "text", "central", "idea", "example", "given", "effect", "explains"}]
+            (hit if words and any(w in answer for w in words) and "idk" not in answer else missed).append(int(idx))
+        feedback = "You covered the main ideas." if not missed else "You missed an important idea from the text."
+        return json.dumps({"points_hit": hit, "points_missed": missed, "feedback": feedback})
+
+    def _quiz_short_answer(self, user: str, long: bool = False) -> str:
         qtype = (re.search(r"^QUESTION TYPE:\s*(.+)$", user, re.M) or [None, "CROSS_CONCEPT"])[1].strip().lower()
         name = (re.search(r"^PRIMARY CONCEPT:\s*(.+)$", user, re.M) or [None, "this concept"])[1].strip()
         desc = (re.search(r"^PRIMARY DESCRIPTION:\s*(.+)$", user, re.M) or [None, ""])[1].strip()
@@ -174,9 +209,17 @@ class FakeLLMProvider:
         else:
             q = f"Explain how {name} works using an example or principle from the page."
             expected = desc or f"{name} operates according to the principles stated on the textbook page."
+        if long:
+            q = (f"Explain how {name} and {rel} are connected, in a paragraph." if qtype == "cross_concept" and rel
+                 else f"Explain {name} in a paragraph, with an example from the page.")
+            expected = expected + " It has an effect the text explains, and the text gives an example."
+        key_points = self._rubric_for(name, desc, long)
+        if qtype == "cross_concept" and rel:
+            key_points.append({"point": f"{name} and {rel} are linked in the text", "marks": 1})
         return json.dumps({
             "question": q[:450],
             "expected_answer": expected[:550],
+            "key_points": key_points,
             "explanation": f"Grounded in the textbook section on {name}" + (f" and {rel}." if rel else "."),
         })
 

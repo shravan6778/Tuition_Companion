@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, Uuid, Boolean, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .answers import WrittenAnswerMixin
 from .base import Base
 
 
@@ -26,6 +27,7 @@ class AssignmentCheck(Base):
     assignment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("assignments.id", ondelete="SET NULL"), index=True, nullable=True)
     assignment_title: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(10), default="open", server_default="open")
+    subject: Mapped[str | None] = mapped_column(String(120), nullable=True)  # the assignment's subject, kept for the maths-type rule if it is deleted
     score: Mapped[float | None] = mapped_column(Float, nullable=True)  # share of the graded questions answered right, set on submit
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -34,9 +36,15 @@ class AssignmentCheck(Base):
         back_populates="check", cascade="all, delete-orphan", order_by="CheckQuestion.position")
 
 
-class CheckQuestion(Base):
+class CheckQuestion(WrittenAnswerMixin, Base):
     __tablename__ = "check_questions"
-    __table_args__ = (CheckConstraint("status IN ('pending','ready','failed')", name="ck_check_question_status"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','ready','failed')", name="ck_check_question_status"),
+        CheckConstraint("answer_format IN ('mcq','short_answer','long_answer')", name="ck_check_question_format"),
+        CheckConstraint("input_method IN ('typed','voice')", name="ck_check_question_input_method"),
+        CheckConstraint("score_source IS NULL OR score_source IN ('ai','teacher')", name="ck_check_question_score_source"),
+        CheckConstraint("score IS NULL OR (score >= 0 AND score <= 1)", name="ck_check_question_score_range"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     check_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("assignment_checks.id", ondelete="CASCADE"), index=True)
@@ -46,9 +54,16 @@ class CheckQuestion(Base):
     status: Mapped[str] = mapped_column(String(8), default="pending", server_default="pending")
     question: Mapped[str | None] = mapped_column(Text, nullable=True)
     options: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # mcq (the default, graded in code) | short_answer | long_answer (graded against `key_points`; see assessment/llm_grader.py)
+    answer_format: Mapped[str] = mapped_column(String(16), default="mcq", server_default="mcq", nullable=False)
     correct_index: Mapped[int | None] = mapped_column(Integer, nullable=True)  # THE KEY: never sent before submission
+    expected_answer: Mapped[str | None] = mapped_column(Text, nullable=True)  # model answer of a written question: never sent before submission
+    key_points: Mapped[list | None] = mapped_column(JSON, nullable=True)  # the rubric [{"point","marks"}]: never sent before submission
     explanation: Mapped[str] = mapped_column(Text, default="", server_default="")
     chosen_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # a written / spoken answer (after the student reviewed it)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0..1 for a written answer (marks won / marks available)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)  # the grader's one-sentence note
 
     check: Mapped[AssignmentCheck] = relationship(back_populates="questions")

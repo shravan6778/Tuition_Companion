@@ -9,7 +9,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.assessment import checks, llm_grader, mastery, quiz_agent
+from app.assessment import answers as answer_rules, checks, llm_grader, mastery, quiz_agent
+from app.assessment.subject_policy import is_math_like, policy_for
 from app.assignments import service as assignment_service
 from app.assignments.scope import chapter_concepts
 from app.content_library import access
@@ -74,6 +75,23 @@ def _store():
         return None
 
 
+def concept_subjects(db: Session, concept_ids) -> dict[uuid.UUID, Optional[str]]:
+    """concept id -> the subject of the book it belongs to (decides whether long and spoken answers are allowed)."""
+    ids = list(dict.fromkeys(i for i in concept_ids if i is not None))
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(Concept.id, Book.subject).join(Page, Page.id == Concept.page_id).join(Chapter, Chapter.id == Page.chapter_id)
+        .join(Book, Book.id == Chapter.book_id).where(Concept.id.in_(ids))
+    ).all()
+    return {cid: subject for cid, subject in rows}
+
+
+def long_blocked(db: Session, concept_ids) -> list[uuid.UUID]:
+    """The concepts that belong to a maths-type subject: no long answers about them."""
+    return [cid for cid, subject in concept_subjects(db, concept_ids).items() if is_math_like(subject)]
+
+
 def _fill_quiz_questions(
     db: Session,
     quiz: Quiz,
@@ -108,6 +126,7 @@ def _fill_quiz_questions(
             q.options = made.options
             q.correct_index = made.correct_index
             q.expected_answer = made.expected_answer
+            q.key_points = made.key_points
             q.explanation = made.explanation
             q.status = "ready"
             asked.setdefault(q.concept_id, []).append(made.question)
@@ -222,7 +241,7 @@ def generate_teacher_quiz(db: Session, teacher: User, spec: TeacherQuizSpec) -> 
     cids = [c.id for c in concepts]
     contexts, related_map = quiz_agent.load_concept_contexts(db, cids, book_ids=[book.id], store=_store())
     primary_cids = [cid for cid in cids if cid in contexts]
-    plan = quiz_agent.plan_quiz_questions(primary_cids, count, related_map)
+    plan = quiz_agent.plan_quiz_questions(primary_cids, count, related_map, no_long=long_blocked(db, primary_cids))
     if not plan:
         raise HTTPException(status.HTTP_409_CONFLICT, "No ready concepts found to generate a quiz")
 
@@ -464,7 +483,7 @@ def generate_student_practice_quiz(db: Session, student: User, spec: StudentPrac
     )
     valid_slots = [cid for cid in weighted_slots if cid in contexts]
     plan = quiz_agent.plan_quiz_questions(
-        valid_slots, count, related_map, preserve_slots=True
+        valid_slots, count, related_map, preserve_slots=True, no_long=long_blocked(db, valid_slots)
     )
     if not plan:
         raise HTTPException(status.HTTP_409_CONFLICT, "No ready concepts found to generate a practice quiz")
@@ -511,7 +530,10 @@ def generate_student_practice_quiz(db: Session, student: User, spec: StudentPrac
 class QuizAnswerInput:
     question_id: uuid.UUID
     chosen_index: Optional[int] = None
-    answer_text: Optional[str] = None
+    answer_text: Optional[str] = None  # a short / long answer: typed, or the spoken transcript the student reviewed
+    input_method: str = "typed"  # typed | voice
+    language: Optional[str] = None  # voice only: en-IN | hi-IN | te-IN
+    transcript_confirmed: bool = False  # voice only: the student ticked that they read it
 
 
 def can_submit_quiz(quiz: Quiz) -> bool:
@@ -547,73 +569,56 @@ def submit_quiz(db: Session, student: User, quiz: Quiz, answers: dict[uuid.UUID,
 
     cids = {q.concept_id for q in quiz.questions if q.concept_id}
     concept_names = {c.id: c.name for c in db.scalars(select(Concept).where(Concept.id.in_(cids)))} if cids else {}
+    subjects = concept_subjects(db, cids)
 
-    llm = _llm()
     ready_questions = [q for q in quiz.questions if q.status == "ready"]
-    graded_rows: list[QuizResponse] = []
-    per_concept: dict[uuid.UUID, tuple[int, int]] = {}
-
+    # Every 422 (a spoken answer for a maths subject, an unconfirmed transcript, a wrong language) comes before the first model call.
+    cleaned: dict[uuid.UUID, answer_rules.AnswerInput] = {}
     for q in ready_questions:
         ans = answers.get(q.id)
+        raw = answer_rules.AnswerInput(chosen_index=ans.chosen_index, answer_text=ans.answer_text, input_method=ans.input_method,
+                                       language=ans.language, transcript_confirmed=ans.transcript_confirmed) if ans is not None else answer_rules.AnswerInput()
+        cleaned[q.id] = answer_rules.validate(q.answer_format, raw, voice_allowed=policy_for(subjects.get(q.concept_id)).voice_allowed)
+
+    llm = _llm()
+    graded_rows: list[QuizResponse] = []
+    tally = answer_rules.ConceptTally()
+
+    for q in ready_questions:
+        inp = cleaned[q.id]
         if q.answer_format == AnswerFormat.MCQ:
-            chosen = (
-                ans.chosen_index
-                if ans is not None and isinstance(ans.chosen_index, int) and not isinstance(ans.chosen_index, bool)
-                else None
-            )
+            chosen = inp.chosen_index if isinstance(inp.chosen_index, int) and not isinstance(inp.chosen_index, bool) else None
             g = checks.grade(
                 checks.Question(str(q.concept_id), q.question or "", list(q.options or []), q.correct_index or 0, q.explanation),
                 chosen,
             )
-            q_score = 1.0 if g.correct else 0.0
-            q_correct = g.correct
-            q_feedback = q.explanation
             resp = QuizResponse(
                 quiz_id=quiz.id,
                 question_id=q.id,
                 student_id=student.id,
                 chosen_index=chosen,
                 answer_text=None,
-                score=q_score,
-                correct=q_correct,
-                feedback=q_feedback,
+                score=1.0 if g.correct else 0.0,
+                correct=g.correct,
+                feedback=q.explanation,
             )
         else:
-            raw_text = ans.answer_text if ans is not None else None
             try:
-                sa_grade = llm_grader.grade_short_answer(
-                    llm,
-                    question=q.question or "",
-                    expected_answer=q.expected_answer or "",
-                    student_answer=raw_text,
-                    concept_name=concept_names.get(q.concept_id, ""),
+                out = answer_rules.grade_input(
+                    llm, inp, question=q.question or "", key_points=q.key_points, expected_answer=q.expected_answer,
+                    concept_name=concept_names.get(q.concept_id, ""), fmt=q.answer_format,
                 )
-            except llm_grader.ShortAnswerGradeError as exc:
+            except HTTPException:
                 db.rollback()
-                raise HTTPException(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    str(exc),
-                ) from exc
-            q_score = sa_grade.score
-            q_correct = sa_grade.correct
-            q_feedback = sa_grade.feedback
-            resp = QuizResponse(
-                quiz_id=quiz.id,
-                question_id=q.id,
-                student_id=student.id,
-                chosen_index=None,
-                answer_text=" ".join((raw_text or "").split()) or None,
-                score=q_score,
-                correct=q_correct,
-                feedback=q_feedback,
-            )
+                raise
+            resp = QuizResponse(quiz_id=quiz.id, question_id=q.id, student_id=student.id, chosen_index=None)
+            answer_rules.apply(resp, inp, out)
 
         graded_rows.append(resp)
-        if q.concept_id is not None:
-            asked, right = per_concept.get(q.concept_id, (0, 0))
-            per_concept[q.concept_id] = (asked + 1, right + (1 if q_correct else 0))
+        tally.add(q.concept_id, resp.correct)  # a spoken answer waiting for the teacher is not counted yet
 
-    overall_score = round(sum(r.score for r in graded_rows) / len(graded_rows), 4) if graded_rows else 0.0
+    scored = [r.score for r in graded_rows if r.score is not None]
+    overall_score = round(sum(scored) / len(scored), 4) if scored else None
     now = datetime.now(timezone.utc)
 
     try:
@@ -621,7 +626,7 @@ def submit_quiz(db: Session, student: User, quiz: Quiz, answers: dict[uuid.UUID,
         quiz.score = overall_score
         quiz.status = SUBMITTED
         quiz.submitted_at = now
-        mastery.record_quiz(db, student.id, quiz.id, quiz.assignment_id, per_concept)
+        mastery.record_quiz(db, student.id, quiz.id, quiz.assignment_id, tally.per_concept)
         db.commit()
     except Exception:
         db.rollback()

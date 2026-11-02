@@ -1,5 +1,6 @@
 from app.models.assignment import (Assignment, AssignmentConcept, AssignmentItem, AssignmentItemKind, AssignmentLevel,
                                    ManualSubmission, SubmissionSource, Verdict)
+from app.models.answers import InputMethod, ScoreSource
 from app.models.base import Base
 from app.models.check import AssignmentCheck, CheckQuestion
 from app.models.content import (
@@ -23,6 +24,8 @@ __all__ = [
     "AssignmentItemKind",
     "AssignmentLevel",
     "Base",
+    "InputMethod",
+    "ScoreSource",
     "CheckQuestion",
     "Doubt",
     "ManualSubmission",
