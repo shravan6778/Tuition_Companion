@@ -36,14 +36,15 @@ export function AuthProvider({ children }) {
       ],
     });
     if (response.status !== "OK") {
-      throw new Error("Invalid username or password"); // generic on purpose
+      // generic on purpose, except the two messages the server writes for the person: locked out, or account disabled
+      throw new Error(response.status === "GENERAL_ERROR" && response.message ? response.message : "Invalid username or password");
     }
     const me = (await api("/auth/me")).data;
     setProfile(me);
     return me;
   }
 
-  async function signup({ name, username, phone, password, role }) {
+  async function signup({ name, username, phone, password, role, inviteCode }) {
     const normalizedUsername = normalizeUsername(username);
     const response = await signUp({
       formFields: [
@@ -53,6 +54,7 @@ export function AuthProvider({ children }) {
         { id: "username", value: normalizedUsername },
         { id: "phone", value: normalizePhone(phone) },
         { id: "role", value: role },
+        { id: "invite_code", value: role === "teacher" ? (inviteCode || "").trim() : "" },
       ],
     });
     if (response.status !== "OK") {

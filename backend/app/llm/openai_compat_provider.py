@@ -18,6 +18,7 @@ class OpenAICompatProvider:
         self.model_name = model
         self.vision_model = settings.vision_model or model
         self._client = OpenAI(base_url=base_url or None, api_key=api_key, timeout=timeout_s, max_retries=1)
+        self.last_total_tokens: int | None = None  # read by usage/metered.py right after each call
 
     def complete_json(self, system: str, user: str) -> str:
         try:
@@ -30,6 +31,7 @@ class OpenAICompatProvider:
         except Exception as exc:  # network, auth, quota, timeout
             logger.exception("LLM call failed")
             raise ProcessingError("The AI service couldn't be reached. Please try again in a moment.") from exc
+        self.last_total_tokens = getattr(getattr(resp, "usage", None), "total_tokens", None)
         return resp.choices[0].message.content or ""
 
     def describe_figure(self, image_bytes: bytes, *, page_number: int, label: str | None = None) -> str:
@@ -55,6 +57,7 @@ class OpenAICompatProvider:
                 temperature=0.1,
                 response_format={"type": "json_object"},
             )
+            self.last_total_tokens = getattr(getattr(resp, "usage", None), "total_tokens", None)
             raw = resp.choices[0].message.content or "{}"
             obj = json.loads(raw)
             return str(obj.get("description") or "").strip()[:6000]

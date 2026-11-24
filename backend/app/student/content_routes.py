@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app import audit
 
 from app.auth.dependencies import require_student
 from app.content_library import access, deletion
@@ -162,5 +163,9 @@ def list_my_chapters(book_id: uuid.UUID, student=Depends(require_student), db: S
 
 @router.delete("/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_book(book_id: uuid.UUID, student=Depends(require_student), db: Session = Depends(get_db)):
-    deletion.delete_book(db, access.get_owned_book(db, student, book_id))
+    book = access.get_owned_book(db, student, book_id)
+    # committed together with the deletion by delete_book's own commit
+    audit.record(db, "book.delete", actor=student, target_type="book", target_id=book.id,
+                 target_label=f"{book.class_name} {book.subject}", detail={"chapters": len(book.chapters)})
+    deletion.delete_book(db, book)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

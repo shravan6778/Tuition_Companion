@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app import audit
 
 from app.assessment import mastery, quiz_service
 from app.assessment.routes import AtRiskOut, ConceptResultOut
@@ -309,6 +310,7 @@ def get_quiz(quiz_id: uuid.UUID, teacher=Depends(require_teacher), db: Session =
 @teacher_quiz_router.delete("/{quiz_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_quiz(quiz_id: uuid.UUID, teacher=Depends(require_teacher), db: Session = Depends(get_db)):
     quiz = quiz_service.get_teacher_quiz(db, teacher, quiz_id)
+    audit.record(db, "quiz.delete", actor=teacher, target_type="quiz", target_id=quiz.id)
     db.delete(quiz)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

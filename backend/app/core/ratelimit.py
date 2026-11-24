@@ -29,6 +29,29 @@ class RateLimiter:
                 )
             hits.append(now)
 
+    # --- failure counting (login lockout): count only what went wrong, and forget it on success ---
+
+    def retry_after(self, bucket: str, subject: str, limit: int, per_seconds: int) -> int:
+        """Seconds until `subject` may try again, or 0 when it is under `limit` recorded failures in the window."""
+        now = time.monotonic()
+        with self._lock:
+            hits = self._hits.get((bucket, subject))
+            if not hits:
+                return 0
+            while hits and now - hits[0] >= per_seconds:
+                hits.popleft()
+            if len(hits) < limit:
+                return 0
+            return max(1, int(per_seconds - (now - hits[0])) + 1)
+
+    def record(self, bucket: str, subject: str) -> None:
+        with self._lock:
+            self._hits[(bucket, subject)].append(time.monotonic())
+
+    def clear(self, bucket: str, subject: str) -> None:
+        with self._lock:
+            self._hits.pop((bucket, subject), None)
+
     def reset(self) -> None:
         with self._lock:
             self._hits.clear()

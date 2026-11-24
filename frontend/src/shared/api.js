@@ -55,6 +55,9 @@ api.get = (path, options = {}) => api(path, { method: "GET", ...options });
 api.post = (path, body, options = {}) =>
   api(path, { method: "POST", body: body || undefined, ...options });
 
+api.put = (path, body, options = {}) =>
+  api(path, { method: "PUT", body: body || undefined, ...options });
+
 api.delete = (path, options = {}) => api(path, { method: "DELETE", ...options });
 
 export default api;

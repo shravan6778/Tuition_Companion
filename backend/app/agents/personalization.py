@@ -187,7 +187,8 @@ def assemble_briefing_context(db: Session, teacher: User, student_id: uuid.UUID)
 def _build_user_prompt(ctx: BriefingContext) -> str:
     lines = [
         "PERSONALIZATION BRIEFING",
-        f"STUDENT: {ctx.student_name}",
+        # The real name is not needed to write a briefing and must not leave the server unless it is switched on.
+        f"STUDENT: {ctx.student_name if settings.llm_send_student_names else 'this student'}",
         "\nRECENT SESSION LOGS (newest first, up to 3):",
     ]
     if ctx.recent_sessions:

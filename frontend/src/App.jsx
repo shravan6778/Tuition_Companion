@@ -12,6 +12,7 @@ import MyBooks from "./student/MyBooks.jsx";
 import ChapterReader from "./student/ChapterReader.jsx";
 import CheckPage from "./student/CheckPage.jsx";
 import QuizPage from "./student/QuizPage.jsx";
+import AdminDashboard from "./admin/AdminDashboard.jsx";
 import TeacherDashboard from "./teacher/TeacherDashboard.jsx";
 import RoomDetail from "./teacher/RoomDetail.jsx";
 import StudentHub from "./teacher/StudentHub.jsx";
@@ -48,6 +49,9 @@ export default function App() {
         path="/teacher/library"
         element={guard("teacher", <TeacherLibrary />)}
       />
+
+      {/* Administrator (a teacher listed in ADMIN_USERNAMES) */}
+      <Route path="/admin" element={<ProtectedRoute roles={["teacher"]} adminOnly><AdminDashboard /></ProtectedRoute>} />
 
       {/* Student Routes */}
       <Route path="/student" element={guard("student", <TodayWork />)} />

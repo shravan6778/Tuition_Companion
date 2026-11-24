@@ -18,6 +18,7 @@ class UserOut(BaseModel):
     role: str
     link_code: Optional[str] = None
     created_at: datetime
+    status: str = "active"  # active | pending (a teacher waiting for approval) | disabled
     is_admin: bool = False  # may delete official books/chapters (see ADMIN_USERNAMES); only /auth/me fills it in
 
 

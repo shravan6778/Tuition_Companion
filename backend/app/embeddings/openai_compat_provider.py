@@ -18,9 +18,11 @@ class OpenAICompatEmbeddingProvider:
         self._batch_size = max(1, batch_size)
         self._send_dimensions = send_dimensions
         self._client = client or OpenAI(base_url=base_url or None, api_key=api_key, timeout=timeout_s, max_retries=2)
+        self.last_total_tokens: int | None = None  # read by usage/metered.py right after each embed() call
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
+        reported = 0
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start:start + self._batch_size]
             extra = {"dimensions": self.dim} if self._send_dimensions else {}
@@ -29,6 +31,7 @@ class OpenAICompatEmbeddingProvider:
             except Exception as exc:  # network, auth, quota, unknown deployment
                 logger.exception("Embedding call failed")
                 raise EmbeddingError("The embedding service couldn't be reached.") from exc
+            reported += int(getattr(getattr(response, "usage", None), "total_tokens", 0) or 0)
             items = sorted(response.data, key=lambda item: item.index)
             if len(items) != len(batch):
                 raise EmbeddingError(f"Asked for {len(batch)} embeddings, got {len(items)}.")
@@ -39,4 +42,5 @@ class OpenAICompatEmbeddingProvider:
                         "Set EMBEDDING_DIM to the model's size (1536 for text-embedding-3-small)."
                     )
                 vectors.append(list(item.embedding))
+        self.last_total_tokens = reported or None
         return vectors

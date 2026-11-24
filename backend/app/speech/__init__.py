@@ -11,6 +11,15 @@ LANGUAGE_LABELS = {"en-IN": "English", "hi-IN": "हिन्दी (Hindi)", "t
 
 def get_speech_provider() -> Optional[SpeechToText]:
     """The SERVER speech-to-text, or None when speech is browser-only (the default: no backend, nothing to pay for)."""
+    provider = _build_speech_provider()
+    if provider is not None and settings.usage_metering_enabled:  # kill switch + daily caps + usage_events (usage/)
+        from app.usage.metered import MeteredSpeech
+
+        return MeteredSpeech(provider, "azure_speech" if settings.speech_provider.lower() == "azure" else settings.speech_provider.lower())
+    return provider
+
+
+def _build_speech_provider() -> Optional[SpeechToText]:
     kind = settings.speech_provider.lower()
     if kind == "azure":
         from .azure_provider import build

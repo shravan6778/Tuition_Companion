@@ -5,6 +5,15 @@ from .fake_provider import FakeOCRProvider
 
 
 def get_ocr_provider() -> OCRProvider:
+    provider = _build_ocr_provider()
+    if settings.usage_metering_enabled:  # kill switch + daily caps + usage_events (usage/)
+        from app.usage.metered import MeteredOCR
+
+        return MeteredOCR(provider, "azure_doc_intel" if settings.ocr_provider == "azure" else settings.ocr_provider)
+    return provider
+
+
+def _build_ocr_provider() -> OCRProvider:
     if settings.ocr_provider == "azure":
         if not settings.azure_doc_intel_endpoint or not settings.azure_doc_intel_key:
             raise RuntimeError(

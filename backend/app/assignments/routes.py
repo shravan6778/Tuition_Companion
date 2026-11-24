@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
+from app import audit
 
 from app.assignments import manual, service
 from app.auth.dependencies import require_student, require_teacher
@@ -188,6 +189,8 @@ def delete_assignment(assignment_id: uuid.UUID, teacher=Depends(require_teacher)
     db.execute(update(Doubt).where(Doubt.assignment_id == assignment.id).values(assignment_id=None))
     db.execute(update(AssignmentCheck).where(AssignmentCheck.assignment_id == assignment.id).values(assignment_id=None))
     db.execute(update(Quiz).where(Quiz.assignment_id == assignment.id).values(assignment_id=None))
+    audit.record(db, "assignment.delete", actor=teacher, target_type="assignment", target_id=assignment.id,
+                 target_label=getattr(assignment, "title", None))
     db.delete(assignment); db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app import audit
 
 from app.assessment import mastery
 from app.auth.dependencies import require_parent
@@ -82,6 +83,7 @@ def link_child(
             status=ParentLinkStatus.PENDING,
         )
         db.add(existing)
+        audit.record(db, "parent.link_requested", actor=parent, target_type="user", target_id=student.id, target_label=student.username)
         db.commit()
         db.refresh(existing)
 

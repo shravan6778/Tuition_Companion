@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from app import audit
 
 from app.auth.dependencies import require_student
 from app.content_library import access
@@ -52,6 +53,7 @@ def join_room(body: JoinRoomIn, student=Depends(require_student), db: Session = 
         existing.created_at = datetime.now(timezone.utc)
     else:
         db.add(RoomJoinRequest(room_id=room.id, user_id=student.id, status="pending"))
+    audit.record(db, "room.join_requested", actor=student, target_type="room", target_id=room.id, target_label=room.name)
     try:
         db.commit()
     except IntegrityError:
@@ -86,6 +88,7 @@ def cancel_room_request(room_id: uuid.UUID, student=Depends(require_student), db
                        RoomJoinRequest.user_id == student.id, RoomJoinRequest.status == "pending"))
     if req is None:
         raise HTTPException(404, "Pending join request not found")
+    audit.record(db, "room.join_cancelled", actor=student, target_type="room", target_id=room_id)
     db.delete(req)
     db.commit()
 
@@ -95,6 +98,8 @@ def leave_room(room_id: uuid.UUID, student=Depends(require_student), db: Session
     member = db.scalar(select(RoomMember).where(RoomMember.room_id == room_id, RoomMember.user_id == student.id))
     if member is None:
         raise HTTPException(404, "You are not a member of this room")
+    audit.record(db, "room.left", actor=student, target_type="room", target_id=room_id,
+                 target_label=db.scalar(select(Room.name).where(Room.id == room_id)))
     db.delete(member)
     db.commit()
 
@@ -215,6 +220,7 @@ def approve_parent_link(
     if link.status != ParentLinkStatus.APPROVED:
         link.status = ParentLinkStatus.APPROVED
         link.approved_at = datetime.now(timezone.utc)
+        audit.record(db, "parent.link_approved", actor=student, target_type="user", target_id=parent.id, target_label=parent.username)
         db.commit()
         db.refresh(link)
     return _parent_link_out(link, parent)
@@ -234,6 +240,9 @@ def reject_or_remove_parent_link(
     )
     if link is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Parent link request not found")
+    audit.record(db, "parent.link_removed", actor=student, target_type="user", target_id=link.parent_id,
+                 target_label=db.scalar(select(User.username).where(User.id == link.parent_id)),
+                 detail={"was": link.status})
     db.delete(link)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

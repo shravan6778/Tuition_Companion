@@ -21,7 +21,7 @@ const NAV = {
 export default function Header({ title, subtitle }) {
   const { profile, logout } = useAuth();
   const role = profile?.role?.toLowerCase();
-  const links = NAV[role] || [];
+  const links = [...(NAV[role] || []), ...(profile?.is_admin ? [["/admin", "Admin"]] : [])];
   return (
     <>
       <header className="topbar">

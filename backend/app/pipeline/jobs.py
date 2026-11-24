@@ -3,6 +3,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from app.core import requestctx
 from app.core.config import settings
 from app.core.errors import ProcessingError
 from app.core.storage import read_file
@@ -45,6 +46,13 @@ def mark_processing(chapter: Chapter) -> None:
 
 
 def run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory, fresh: bool = False) -> None:
+    """Runs the job on behalf of `user_id`: its OCR / LLM / embedding calls are counted against that user's daily caps
+    (usage/), and its log lines carry that user and the request id of the request that queued it."""
+    with requestctx.acting_as(user_id):
+        _run_chapter_job(chapter_id, user_id, session_factory, fresh)
+
+
+def _run_chapter_job(chapter_id: uuid.UUID, user_id: uuid.UUID, session_factory, fresh: bool = False) -> None:
     """Runs after the HTTP response, with its OWN session (the request's session is closed by then).
     Pages and the 'ready' status are committed together, so a failure never leaves half a chapter."""
     db = session_factory()

@@ -149,3 +149,29 @@ def fresh_rate_limits():
     limiter.reset()
     yield
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def usage_metering_off_by_default(monkeypatch):
+    """Metering writes usage_events through its own session (usage/service.py), which the in-memory test databases
+    do not share. Tests of the metering itself switch it on with the `metering` fixture below."""
+    from app.core.config import settings
+    from app.usage import service
+
+    monkeypatch.setattr(settings, "usage_metering_enabled", False)
+    service.forget_cached_kill_switch()
+    yield
+    service.set_session_factory(None)
+    service.forget_cached_kill_switch()
+
+
+@pytest.fixture()
+def metering(monkeypatch, session_factory):
+    """Metering ON, writing to the same test database as the app."""
+    from app.core.config import settings
+    from app.usage import service
+
+    monkeypatch.setattr(settings, "usage_metering_enabled", True)
+    service.set_session_factory(session_factory)
+    service.forget_cached_kill_switch()
+    return service

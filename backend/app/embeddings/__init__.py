@@ -8,6 +8,15 @@ from .fake_provider import FakeEmbeddingProvider
 
 def get_embedding_provider() -> Optional[EmbeddingProvider]:
     """None means embeddings are switched off (EMBEDDING_PROVIDER=none): the pipeline skips them."""
+    provider = _build_embedding_provider()
+    if provider is not None and settings.usage_metering_enabled:  # kill switch + daily caps + usage_events (usage/)
+        from app.usage.metered import MeteredEmbeddings
+
+        return MeteredEmbeddings(provider, settings.embedding_provider.lower())
+    return provider
+
+
+def _build_embedding_provider() -> Optional[EmbeddingProvider]:
     kind = settings.embedding_provider.lower()
     if kind == "openai_compat":
         api_key = settings.embedding_api_key or settings.llm_api_key  # same Azure resource by default

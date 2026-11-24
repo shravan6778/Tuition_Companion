@@ -156,6 +156,41 @@ class Settings(BaseSettings):
     trend_weeks: int = 4  # weekly buckets returned by GET /teacher/students/{id}/trends
     briefing_cache_ttl_s: int = 300  # 5-minute strict TTL so page reloads don't re-bill the LLM
     rate_briefings_per_hour: int = 30
+    # --- Admin, security & monitoring (see docs/ADMIN_SECURITY_MONITORING.md)
+    # Teacher signup: "approval" (default: the account waits for an administrator), "invite" (an invite code is
+    # mandatory) or "open" (anyone can register as a teacher: only for a private network or local development).
+    # A valid invite code always activates a teacher account at once, in "approval" mode as well.
+    teacher_signup_mode: str = "approval"
+    teacher_invite_default_days: int = 7
+    # Failed logins per username before that username is locked out (core/ratelimit.py; per process).
+    login_max_failures: int = 5
+    login_window_s: int = 900
+    # Metering of paid/free-tier AI calls (usage/). Switch off only for scripts and tests.
+    usage_metering_enabled: bool = True
+    usage_day_timezone: str = "Asia/Kolkata"  # the "day" of the per-user daily caps
+    ai_kill_switch: bool = False  # True forces every LLM / OCR / embedding / speech call to be refused
+    # Per-user daily caps for students and parents. 0 = unlimited. Teachers get cap * usage_teacher_multiplier.
+    # An administrator can override any of them for one user (PUT /admin/users/{id}/caps).
+    usage_cap_llm_tokens: int = 150_000
+    usage_cap_ocr_pages: int = 60
+    usage_cap_embedding_tokens: int = 200_000
+    usage_cap_speech_calls: int = 100
+    usage_teacher_multiplier: float = 4.0
+    # Global daily caps over all users together (protects a free tier's total). 0 = unlimited.
+    usage_global_cap_llm_tokens: int = 0
+    usage_global_cap_ocr_pages: int = 0
+    usage_global_cap_embedding_tokens: int = 0
+    usage_global_cap_speech_calls: int = 0
+    # LLM data protection. A real (non-fake) LLM must not be a free tier that may train on prompts.
+    # In any ENV other than "dev" the server refuses to start until this is set to true on purpose.
+    llm_no_training_confirmed: bool = False
+    # False (default): the student's name is not put in prompts sent to the LLM.
+    llm_send_student_names: bool = False
+    # Monitoring
+    uptime_ping_url: str = ""  # optional heartbeat URL (e.g. healthchecks.io) pinged while the database answers
+    uptime_ping_interval_s: int = 300
+    error_rate_window_min: int = 15
+    error_rate_warn: float = 0.05  # 5xx share of requests above which the status page says "degraded"
 
 settings = Settings()
 

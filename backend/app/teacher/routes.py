@@ -4,6 +4,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from app import audit
 
 from app.auth.dependencies import require_teacher
 from app.content_library import access
@@ -75,6 +76,8 @@ def approve_room_join_request(room_id: uuid.UUID, request_id: uuid.UUID,
         member = RoomMember(room_id=room.id, user_id=student.id)
         db.add(member)
     req.status = "approved"
+    audit.record(db, "room.join_approved", actor=teacher, target_type="room", target_id=room.id, target_label=room.name,
+                 detail={"student": student.username})
     db.commit()
     db.refresh(member)
     return MemberOut(id=student.id, name=student.name, joined_at=member.joined_at)
@@ -90,6 +93,8 @@ def reject_room_join_request(room_id: uuid.UUID, request_id: uuid.UUID,
     if req is None:
         raise HTTPException(404, "Pending join request not found")
     req.status = "rejected"
+    audit.record(db, "room.join_rejected", actor=teacher, target_type="room", target_id=room.id, target_label=room.name,
+                 detail={"student": db.scalar(select(User.username).where(User.id == req.user_id))})
     db.commit()
 
 
@@ -100,6 +105,8 @@ def remove_room_member(room_id: uuid.UUID, student_id: uuid.UUID,
     member = db.scalar(select(RoomMember).where(RoomMember.room_id == room.id, RoomMember.user_id == student_id))
     if member is None:
         raise HTTPException(404, "Room member not found")
+    audit.record(db, "room.member_removed", actor=teacher, target_type="room", target_id=room.id, target_label=room.name,
+                 detail={"student": db.scalar(select(User.username).where(User.id == student_id))})
     db.delete(member)
     db.commit()
 
@@ -109,6 +116,7 @@ def regenerate_room_join_code(room_id: uuid.UUID, teacher=Depends(require_teache
     room = svc.get_owned_room(db, teacher, room_id)
     room.join_code = generate_unique_code(
         lambda code: db.scalar(select(Room.id).where(Room.join_code == code)) is not None, length=6)
+    audit.record(db, "room.join_code_reset", actor=teacher, target_type="room", target_id=room.id, target_label=room.name)
     db.commit()
     db.refresh(room)
     return room
@@ -132,6 +140,8 @@ def delete_room(room_id: uuid.UUID, body: RoomDeleteIn,
     db.query(Assignment).filter(Assignment.room_id == room.id).delete(synchronize_session=False)
     db.query(RoomJoinRequest).filter(RoomJoinRequest.room_id == room.id).delete(synchronize_session=False)
     db.query(RoomMember).filter(RoomMember.room_id == room.id).delete(synchronize_session=False)
+    audit.record(db, "room.delete", actor=teacher, target_type="room", target_id=room.id, target_label=room.name,
+                 detail={"assignments_deleted": count})
     db.delete(room)
     db.commit()
     return RoomDeleteOut(deleted=True, assignments_deleted=count)

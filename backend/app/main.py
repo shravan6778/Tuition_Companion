@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,8 +13,10 @@ from app.assignments.routes import student_router as assignment_student_router, 
 from app.auth.routes import router as auth_router
 from app.auth.supertokens_config import init_supertokens
 from app.core.config import settings
-from app.core.errors import ProcessingError
+from app.core.errors import ProcessingError, QuotaExceededError
 from app.core.logging import setup_logging
+from app.core.middleware import RequestContextMiddleware
+from app.core.startup import validate_runtime_config
 from app.doubts.routes import router as doubt_router
 from app.parent.routes import router as parent_router
 from app.student.routes import router as student_router
@@ -25,9 +29,20 @@ from app.teacher import routes as teacher_routes
 from app.teacher import student_routes as teacher_student_routes
 
 setup_logging()
+validate_runtime_config()  # refuses to start a non-dev server with an unsafe configuration (core/startup.py)
 init_supertokens()
 
-app = FastAPI(title="Tuition Companion API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from app.monitoring.health import start_heartbeat, stop_heartbeat
+
+    start_heartbeat()  # only when UPTIME_PING_URL is set
+    yield
+    stop_heartbeat()
+
+
+app = FastAPI(title="Tuition Companion API", lifespan=lifespan)
 
 # get_middleware must be added before CORSMiddleware, so CORS ends up
 # as the outer layer and handles preflight before SuperTokens sees the request.
@@ -38,7 +53,18 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type"] + get_all_cors_headers(),
+    expose_headers=["X-Request-ID"],
 )
+# Outermost: gives every request an id (also on CORS preflights and errors), logs it and counts it for the status page.
+app.add_middleware(RequestContextMiddleware)
+
+
+@app.exception_handler(QuotaExceededError)
+def quota_exceeded_handler(request: Request, exc: QuotaExceededError):
+    # Before ProcessingError's handler (this is a subclass): a cap is "try later" (429), the kill switch "paused" (503).
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return JSONResponse(status_code=503 if exc.kind == "kill_switch" else 429, headers=headers,
+                        content={"detail": str(exc), "code": f"ai_{exc.kind}"})
 
 
 @app.exception_handler(ProcessingError)
@@ -50,6 +76,20 @@ def processing_error_handler(request: Request, exc: ProcessingError):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready():
+    """For an external uptime monitor (UptimeRobot, Better Stack...): 200 only while the database answers. No details."""
+    from app.db.session import SessionLocal
+    from app.monitoring.health import check_database
+
+    db = SessionLocal()
+    try:
+        ok = check_database(db)["ok"]
+    finally:
+        db.close()
+    return JSONResponse(status_code=200 if ok else 503, content={"status": "ok" if ok else "unavailable"})
 
 
 app.include_router(auth_router)

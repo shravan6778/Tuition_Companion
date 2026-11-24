@@ -11,6 +11,7 @@ export default function SignupPage() {
     phone: "",
     password: "",
     role: "student",
+    inviteCode: "",
   });
   const [error, setError] = useState("");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -95,6 +96,13 @@ export default function SignupPage() {
             minLength={8}
           />
         </div>
+        {form.role === "teacher" && (
+          <div>
+            <label htmlFor="invite">Teacher invite code (optional)</label>
+            <input id="invite" className="input" value={form.inviteCode} onChange={set("inviteCode")} autoComplete="off" />
+            <span className="small">With a code your account is active at once. Without one, an administrator must approve it first.</span>
+          </div>
+        )}
         {error && <div className="error">{error}</div>}
         <button className="btn" type="submit">
           Sign up
