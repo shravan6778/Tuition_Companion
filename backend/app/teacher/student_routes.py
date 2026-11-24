@@ -67,6 +67,9 @@ class ConceptTrendOut(BaseModel):
     last_checked: Optional[datetime] = None
     reason: Optional[str] = None
     flagged_by_concept_id: Optional[uuid.UUID] = None
+    page_number: Optional[int] = None
+    book_id: Optional[uuid.UUID] = None
+    chapter_sequence: Optional[int] = None
 
 
 class StudentTrendsOut(BaseModel):

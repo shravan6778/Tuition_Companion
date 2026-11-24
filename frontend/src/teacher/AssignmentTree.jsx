@@ -117,6 +117,7 @@ function ChapterBody({ outline, sel, idPrefix, onConcepts, onItems, onRetry }) {
   }
   const { data } = outline;
   const have = (id) => (id === "concepts" ? data.concepts : data[id] || []);
+  const conceptPage = Object.fromEntries((data.concept_pages || []).map((c) => [c.name, c.page_number]));
   return (
     <div style={{ marginLeft: 22 }}>
       {GROUPS.map((g) => {
@@ -140,7 +141,7 @@ function ChapterBody({ outline, sel, idPrefix, onConcepts, onItems, onRetry }) {
                 <label key={id} htmlFor={id} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontWeight: 400, margin: "2px 0 2px 8px" }}>
                   <input id={id} type="checkbox" checked={ticked(r)} style={{ marginTop: 5 }}
                     onChange={(e) => (isConcept ? onConcepts([r], e.target.checked) : onItems([r], e.target.checked))} />
-                  <span>{text}{!isConcept && r.page_number != null && <span className="small"> · p. {r.page_number}</span>}</span>
+                  <span>{text}{(isConcept ? conceptPage[r] : r.page_number) != null && <span className="small"> · p. {isConcept ? conceptPage[r] : r.page_number}</span>}</span>
                 </label>
               );
             })}

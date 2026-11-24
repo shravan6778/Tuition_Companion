@@ -50,10 +50,16 @@ class OutlineItemOut(BaseModel):
     page_number: int
 
 
+class OutlineConceptOut(BaseModel):
+    name: str
+    page_number: int | None = None
+
+
 class ChapterOutlineOut(BaseModel):
     chapter_id: uuid.UUID
     chapter_title: str
     concepts: list[str]
+    concept_pages: list[OutlineConceptOut] = []  # same concepts as `concepts`, with the page each one is taught on
     examples: list[OutlineItemOut]
     exercises: list[OutlineItemOut]
     figures: list[OutlineItemOut]

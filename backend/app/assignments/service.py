@@ -253,9 +253,13 @@ def chapter_outline(db: Session, teacher: User, book_id: uuid.UUID, chapter_id: 
             continue
         seen.add(key)
         groups[item.kind].append({"kind": item.kind, "label": item.label, "page_number": number})
+    concept_pages: dict[str, int | None] = {}
+    for c in chapter_concepts(db, chapter.id):  # book order, so a name that repeats keeps its first page
+        concept_pages.setdefault(c.name, c.page.page_number if c.page is not None else None)
     return {
         "chapter_id": chapter.id, "chapter_title": chapter.title,
         "concepts": list(dict.fromkeys(c.name for c in chapter_concepts(db, chapter.id))),
+        "concept_pages": [{"name": n, "page_number": p} for n, p in concept_pages.items()],
         "examples": groups["example"], "exercises": groups["exercise_question"], "figures": groups["diagram"],
         "activities": groups["activity"] + groups["sidebar"],
     }

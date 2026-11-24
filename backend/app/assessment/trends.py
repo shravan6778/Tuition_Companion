@@ -94,6 +94,9 @@ class ConceptTrendItem:
     last_checked: Optional[datetime]
     reason: Optional[str] = None
     flagged_by_concept_id: Optional[uuid.UUID] = None
+    page_number: Optional[int] = None  # page of the book where the concept is taught
+    book_id: Optional[uuid.UUID] = None
+    chapter_sequence: Optional[int] = None  # chapter order in its book, for grouping
 
 
 @dataclass
@@ -238,9 +241,10 @@ def build_student_trends(
 
     # Map concept_id -> (Concept, Chapter, Book) restricted to books visible to this teacher (official or owned by teacher)
     meta_map: dict[uuid.UUID, tuple[Concept, Chapter, Book]] = {}
+    page_numbers: dict[uuid.UUID, Optional[int]] = {}
     if concept_ids:
         rows = db.execute(
-            select(Concept, Chapter, Book)
+            select(Concept, Chapter, Book, Page.page_number)
             .join(Page, Page.id == Concept.page_id)
             .join(Chapter, Chapter.id == Page.chapter_id)
             .join(Book, Book.id == Chapter.book_id)
@@ -249,8 +253,9 @@ def build_student_trends(
                 or_(Book.is_reference.is_(True), Book.owner_student_id == student.id),
             )
         ).all()
-        for c, ch, bk in rows:
+        for c, ch, bk, page_no in rows:
             meta_map[c.id] = (c, ch, bk)
+            page_numbers[c.id] = page_no
 
     # Filter to concepts the teacher is permitted to see (or concepts whose book is official/the student's own)
     visible_cids = [cid for cid in concept_ids if cid in meta_map]
@@ -301,6 +306,9 @@ def build_student_trends(
                 last_checked=st.last_checked,
                 reason=st.reason,
                 flagged_by_concept_id=st.flagged_by,
+                page_number=page_numbers.get(cid),
+                book_id=bk.id,
+                chapter_sequence=ch.sequence_num,
             )
         )
 
