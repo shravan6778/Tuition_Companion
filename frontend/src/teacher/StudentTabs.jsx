@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { addSession, getBriefing, getTrends, listSessions } from "../api/learning";
 import { Async, Empty, ErrorNote, Pill, ScoreBar, Sparkline, Tabs, fmtDate, fmtDateTime, signedPct, useLoad, useSubmit } from "../shared/ui";
+import { ChapterConcepts, WeakConceptGroups } from "../shared/ConceptViews";
 
 // ---- Briefing: a short pre-session summary written from the student's history and the teacher's notes ----
 export function BriefingTab({ studentId }) {
@@ -143,7 +144,12 @@ export function ProgressTab({ studentId }) {
                   <details className="mt">
                     <summary>{s.chapters.length} chapter{s.chapters.length > 1 ? "s" : ""}</summary>
                     <div className="items mt">
-                      {s.chapters.map((c) => <div className="item" key={c.chapter_id}><TrendLine item={c} label={c.chapter_title} /></div>)}
+                      {s.chapters.map((c) => (
+                        <div className="item" key={c.chapter_id}>
+                          <TrendLine item={c} label={c.chapter_title} />
+                          <ChapterConcepts concepts={t.concepts.filter((x) => x.chapter_id === c.chapter_id)} />
+                        </div>
+                      ))}
                     </div>
                   </details>
                 )}
@@ -165,32 +171,12 @@ export function WeakAreasTab({ studentId }) {
       {(t) => {
         const flagged = t.concepts.filter((c) => c.status !== "ok");
         const shown = flagged.filter((c) => c.status === view);
-        const order = (a, b) => (a.current_score ?? 1) - (b.current_score ?? 1);
         return (
           <div className="stack">
             <Tabs value={view} onChange={setView} tabs={[["weak", `Weak (${t.weak_count})`], ["at_risk", `At risk (${t.at_risk_count})`]]} />
             {flagged.length === 0 && <div className="callout ok">No weak or at-risk ideas right now.</div>}
             {flagged.length > 0 && shown.length === 0 && <div className="card"><Empty>None in this group.</Empty></div>}
-            {shown.length > 0 && (
-              <div className="card items mb0">
-                {[...shown].sort(order).map((c) => (
-                  <div className="item" key={c.concept_id}>
-                    <div className="row" style={{ alignItems: "flex-start" }}>
-                      <div style={{ flex: 1, minWidth: 180 }}>
-                        <strong>{c.concept_name}</strong>
-                        <div className="small">{[c.subject, c.chapter_title].filter(Boolean).join(" · ")}</div>
-                      </div>
-                      <div style={{ minWidth: 150, flex: 1 }}>
-                        {c.current_score != null ? <ScoreBar value={c.current_score} label={c.concept_name} /> : <span className="small">Flagged, not measured</span>}
-                        {c.last_checked && <div className="small">Last tested {fmtDate(c.last_checked)} · {c.event_count} result{c.event_count === 1 ? "" : "s"}</div>}
-                      </div>
-                      <Pill kind={c.trend} />
-                    </div>
-                    {c.reason && <p className="small mb0 mt">Why: {c.reason}</p>}
-                  </div>
-                ))}
-              </div>
-            )}
+            {shown.length > 0 && <WeakConceptGroups concepts={shown} />}
             <p className="small mb0">To work on these, set an assignment or generate a test from the other tabs.</p>
           </div>
         );
