@@ -1,5 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { listMembers, listRooms } from "../api/learning";
+import { getDailyProgress, listMembers, listRooms } from "../api/learning";
+import DailyProgressView from "../shared/DailyProgressView";
 import Header from "../shared/Header";
 import { Async, Tabs, useLoad } from "../shared/ui";
 import AssignmentForm from "./AssignmentForm";
@@ -40,7 +41,7 @@ function WorkTab({ studentId }) {
   );
 }
 
-// One student, six tools. The student must be in one of this teacher's rooms (the server enforces it).
+// One student, seven tools. The student must be in one of this teacher's rooms (the server enforces it).
 export default function StudentHub() {
   const { roomId, studentId } = useParams();
   const [params, setParams] = useSearchParams();
@@ -80,6 +81,9 @@ export default function StudentHub() {
                 {tab === "work" && <WorkTab studentId={studentId} />}
                 {tab === "briefing" && <BriefingTab studentId={studentId} />}
                 {tab === "log" && <SessionLogTab studentId={studentId} />}
+                {tab === "daily" && (
+                  <DailyProgressView key={studentId} fetcher={(from, to) => getDailyProgress(studentId, from, to)} />
+                )}
                 {tab === "progress" && <ProgressTab studentId={studentId} />}
                 {tab === "tests" && (
                   <QuizPanel target={{ student_id: studentId }} />

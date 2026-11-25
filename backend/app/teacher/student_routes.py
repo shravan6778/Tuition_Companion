@@ -8,12 +8,12 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.agents import personalization
-from app.assessment import trends
+from app.assessment import daily_progress, trends
 from app.auth.dependencies import require_teacher
 from app.core.config import settings
 from app.core.ratelimit import limiter
@@ -215,3 +215,20 @@ def get_student_briefing(
     limiter.check("briefing", str(teacher.id), settings.rate_briefings_per_hour, 3600)
     res, _ = personalization.get_or_generate_briefing(db, teacher, student.id, refresh=True)
     return StudentBriefingOut(**res.__dict__)
+
+
+@router.get("/{student_id}/daily-progress", response_model=daily_progress.DailyProgressOut)
+def get_student_daily_progress(
+    student_id: uuid.UUID,
+    date_from: Optional[date] = Query(default=None, alias="from"),
+    date_to: Optional[date] = Query(default=None, alias="to"),
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """What the student did each day (default: the last 14 days): work assigned, checks and homework done, tests, doubts, session notes."""
+    student = trends.ensure_teacher_can_access_student(db, teacher, student_id)
+    try:
+        start, end = daily_progress.resolve_range(date_from, date_to)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
+    return daily_progress.build_daily_progress(db, student, start, end, teacher_id=teacher.id, include_session_notes=True)

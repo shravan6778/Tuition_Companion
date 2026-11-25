@@ -104,6 +104,7 @@ export const confirmAnswer = (kind, id, transcript) => body(api.post(`/teacher/$
 
 // ---- teacher: per-student ----
 export const getTrends = (studentId, weeks) => body(api.get(`/teacher/students/${studentId}/trends${qs({ weeks })}`));
+export const getDailyProgress = (studentId, from, to) => body(api.get(`/teacher/students/${studentId}/daily-progress${qs({ from, to })}`));
 export const getBriefing = (studentId, refresh) => body(api.get(`/teacher/students/${studentId}/briefing${refresh ? "?refresh=true" : ""}`));
 export const listSessions = (studentId) => body(api.get(`/teacher/students/${studentId}/sessions`));
 export const addSession = (studentId, payload) => body(api.post(`/teacher/students/${studentId}/sessions`, payload));
