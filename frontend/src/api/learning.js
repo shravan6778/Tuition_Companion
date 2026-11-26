@@ -113,6 +113,8 @@ export const addSession = (studentId, payload) => body(api.post(`/teacher/studen
 export const listChildren = (includePending = false) => body(api.get(`/parent/children${qs({ include_pending: includePending })}`));
 export const linkChild = (code) => body(api.post("/parent/children/link", { link_code: code }));
 export const getChildProgress = (childId, days = 7) => body(api.get(`/parent/children/${childId}/progress?days=${days}`));
+export const getChildTrends = (childId, weeks) => body(api.get(`/parent/children/${childId}/trends${qs({ weeks })}`));
+export const getChildDailyProgress = (childId, from, to) => body(api.get(`/parent/children/${childId}/daily-progress${qs({ from, to })}`));
 
 export const listParentLinks = () => body(api.get("/student/parent-links"));
 export const approveParentLink = (id) => body(api.post(`/student/parent-links/${id}/approve`));

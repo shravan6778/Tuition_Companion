@@ -1,12 +1,13 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app import audit
 
-from app.assessment import mastery
+from app.assessment import daily_progress, mastery, trends
 from app.auth.dependencies import require_parent
 from app.core.config import settings
 from app.core.ratelimit import limiter
@@ -22,6 +23,7 @@ from app.schemas import (
     ParentWeakAreaOut,
     RoomBrief,
 )
+from app.teacher.student_routes import StudentTrendsOut, trends_to_out
 
 router = APIRouter(prefix="/parent", tags=["parent"], dependencies=[Depends(require_parent)])
 
@@ -263,3 +265,33 @@ def get_child_progress(
         weak_areas=weak_areas,
         recent=recent,
     )
+
+
+@router.get("/children/{child_id}/trends", response_model=StudentTrendsOut)
+def get_child_trends(
+    child_id: uuid.UUID,
+    weeks: Optional[int] = Query(default=None, ge=1, le=12),
+    parent: User = Depends(require_parent),
+    db: Session = Depends(get_db),
+):
+    """The same weekly trends and concept list the teacher sees (Analytics and Weak Areas), read-only, for an approved child."""
+    child = _get_approved_child(db, parent, child_id)
+    return trends_to_out(trends.build_trends_for_student(db, child, weeks=weeks))
+
+
+@router.get("/children/{child_id}/daily-progress", response_model=daily_progress.DailyProgressOut)
+def get_child_daily_progress(
+    child_id: uuid.UUID,
+    date_from: Optional[date] = Query(default=None, alias="from"),
+    date_to: Optional[date] = Query(default=None, alias="to"),
+    parent: User = Depends(require_parent),
+    db: Session = Depends(get_db),
+):
+    """What the child did each day (default: the last 14 days). Same builder as the teacher view, but it covers all of the
+    child's work and never includes a teacher's private session notes."""
+    child = _get_approved_child(db, parent, child_id)
+    try:
+        start, end = daily_progress.resolve_range(date_from, date_to)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
+    return daily_progress.build_daily_progress(db, child, start, end, teacher_id=None, include_session_notes=False)

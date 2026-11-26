@@ -121,14 +121,8 @@ class StudentBriefingOut(BaseModel):
     cached: bool
 
 
-@router.get("/{student_id}/trends", response_model=StudentTrendsOut)
-def get_student_trends(
-    student_id: uuid.UUID,
-    weeks: Optional[int] = Query(default=None, ge=1, le=12),
-    teacher=Depends(require_teacher),
-    db: Session = Depends(get_db),
-):
-    report = trends.build_student_trends(db, teacher, student_id, weeks=weeks)
+def trends_to_out(report: trends.StudentTrendsReport) -> StudentTrendsOut:
+    """Turns a trends report into the response body. Shared by the teacher route and the parent route."""
     return StudentTrendsOut(
         student_id=report.student_id,
         student_name=report.student_name,
@@ -166,6 +160,17 @@ def get_student_trends(
         ],
         concepts=[ConceptTrendOut(**c.__dict__) for c in report.concepts],
     )
+
+
+@router.get("/{student_id}/trends", response_model=StudentTrendsOut)
+def get_student_trends(
+    student_id: uuid.UUID,
+    weeks: Optional[int] = Query(default=None, ge=1, le=12),
+    teacher=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    report = trends.build_student_trends(db, teacher, student_id, weeks=weeks)
+    return trends_to_out(report)
 
 
 @router.post("/{student_id}/sessions", response_model=SessionLogOut, status_code=status.HTTP_201_CREATED)

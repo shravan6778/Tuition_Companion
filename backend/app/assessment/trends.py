@@ -221,6 +221,18 @@ def build_student_trends(
     reference_date: Optional[date] = None,
 ) -> StudentTrendsReport:
     student = ensure_teacher_can_access_student(db, teacher, student_id)
+    return build_trends_for_student(db, student, weeks=weeks, reference_date=reference_date)
+
+
+def build_trends_for_student(
+    db: Session,
+    student: User,
+    *,
+    weeks: Optional[int] = None,
+    reference_date: Optional[date] = None,
+) -> StudentTrendsReport:
+    """The trends report itself. The caller has already proved the reader may see this student
+    (a teacher through `ensure_teacher_can_access_student`, a parent through an approved parent link)."""
     num_weeks = max(1, min(12, weeks or settings.trend_weeks))
     ref_date = reference_date or datetime.now(timezone.utc).date()
     week_ranges = _build_week_ranges(ref_date, num_weeks)
